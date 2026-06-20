@@ -1,0 +1,17 @@
+{
+  "layers": {
+    "ui": "**/*component.ts",
+    "api": "**/*api.service.ts",
+    "facade": "**/*facade.service.ts"
+  },
+  "layerRestrictions": [
+    {
+      "from": "ui",
+      "cannotDependOn": ["api"]
+    }
+  ],
+  "limits": {
+    "maxAllowedDI": 3,
+    "maxLines": 400
+  }
+}
