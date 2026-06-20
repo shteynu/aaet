@@ -1,22 +1,97 @@
 {
   "name": "aaet",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "Configurable Angular architecture analysis and experimental runtime guards",
+  "main": "./dist/libs/core/index.js",
+  "types": "./dist/libs/core/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/libs/core/index.d.ts",
+      "require": "./dist/libs/core/index.js",
+      "import": "./dist/libs/core/index.mjs"
+    },
+    "./config": {
+      "types": "./dist/libs/config/index.d.ts",
+      "require": "./dist/libs/config/index.js",
+      "import": "./dist/libs/config/index.mjs"
+    },
+    "./runtime": {
+      "types": "./dist/libs/runtime/index.d.ts",
+      "require": "./dist/libs/runtime/index.js",
+      "import": "./dist/libs/runtime/index.mjs"
+    }
+  },
+  "bin": {
+    "aaet": "./dist/libs/core/cli.js"
+  },
+  "schematics": "./dist/libs/schematics/collection.json",
+  "files": [
+    "dist/libs/core",
+    "dist/libs/config",
+    "dist/libs/runtime",
+    "dist/libs/schematics",
+    "README.md",
+    "docs",
+    "aaet.config.schema.json"
+  ],
   "scripts": {
-    "test": "nx run-many -t test",
-    "analyze": "nx run-many -t analyze"
+    "test": "nx run-many -t test --exclude=aaet",
+    "analyze": "nx run-many -t analyze --exclude=aaet",
+    "lint": "nx run-many -t lint --exclude=aaet",
+    "typecheck": "nx run-many -t typecheck --exclude=aaet",
+    "build": "nx run-many -t build --exclude=aaet"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@nx/eslint": "^23.0.0",
     "@types/node": "^26.0.0",
-    "minimatch": "^10.2.5",
+    "eslint": "^9.39.4",
+    "nx": "23.0.0",
+    "tsup": "^8.5.1",
     "tsx": "^4.22.4",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.9",
-    "nx": "23.0.0"
+    "typescript-eslint": "^8.61.1",
+    "vitest": "^4.1.9"
   },
-  "nx": {}
+  "nx": {
+    "targets": {
+      "test": {
+        "executor": "nx:run-commands",
+        "options": {
+          "command": "node -e \"process.exit(0)\""
+        }
+      },
+      "typecheck": {
+        "executor": "nx:run-commands",
+        "options": {
+          "command": "node -e \"process.exit(0)\""
+        }
+      },
+      "build": {
+        "executor": "nx:run-commands",
+        "options": {
+          "command": "node -e \"process.exit(0)\""
+        }
+      },
+      "analyze": {
+        "executor": "nx:run-commands",
+        "options": {
+          "command": "node -e \"process.exit(0)\""
+        }
+      },
+      "lint": {
+        "executor": "nx:run-commands",
+        "options": {
+          "command": "node -e \"process.exit(0)\""
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "@angular-devkit/schematics": "^19.2.27",
+    "minimatch": "^10.2.5",
+    "typescript": "^6.0.3"
+  }
 }

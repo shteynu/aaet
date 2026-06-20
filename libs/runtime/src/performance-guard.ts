@@ -1,176 +1,138 @@
 import { analyzeViolationWithAi, isAiGuardEnabled } from './ai-guard';
-import { globalRuntimeConfig } from './config-state';
+import { getConfiguredRuleSettings, getRuntimeConfig, isConfiguredCheckerEnabled, isConfiguredRuleEnabled } from './config-state';
 
 const methodCallCounts = new Map<string, { count: number; lastReset: number }>();
 
 export interface ProfileOptions {
-  thresholdMs?: number;      // Warn if execution exceeds this limit (default: 5ms)
-  maxCallFrequency?: number; // Warn if called more than this per second (default: 10)
+  thresholdMs?: number;
+  maxCallFrequency?: number;
 }
 
-/**
- * Class decorator that wraps all class methods with a JS Proxy.
- * Measures execution time using performance.now() and counts invocation frequency.
- */
-export function ProfileMethods(options: ProfileOptions = {}) {
-  const thresholdMs = options.thresholdMs ?? 5;
-  const maxCallFrequency = options.maxCallFrequency ?? 10;
+function runtimeRuleEnabled(ruleId: string): boolean {
+  return getRuntimeConfig() === null || (isConfiguredCheckerEnabled('runtime') && isConfiguredRuleEnabled('runtime', ruleId));
+}
 
-  return function (target: any) {
+export function ProfileMethods(options: ProfileOptions = {}) {
+  return function(target: any): void {
     const prototype = target.prototype;
     if (!prototype) return;
-
-    const propertyNames = Object.getOwnPropertyNames(prototype);
-
-    for (const name of propertyNames) {
+    for (const name of Object.getOwnPropertyNames(prototype)) {
       const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
-      if (name !== 'constructor' && descriptor && typeof descriptor.value === 'function') {
-        const originalMethod = descriptor.value;
+      if (name === 'constructor' || !descriptor || typeof descriptor.value !== 'function') continue;
+      const originalMethod = descriptor.value;
+      const proxyMethod = new Proxy(originalMethod, {
+        apply(targetMethod, thisArg, argumentsList) {
+          const settings = getConfiguredRuleSettings('runtime');
+          const thresholdMs = options.thresholdMs ?? settings?.slowMethodThresholdMs ?? 5;
+          const maxCallFrequency = options.maxCallFrequency ?? settings?.maxCallFrequency ?? 10;
+          const methodKey = `${target.name || 'Component'}.${name}`;
+          const start = performance.now();
 
-        const proxyMethod = new Proxy(originalMethod, {
-          apply(targetMethod, thisArg, argumentsList) {
-            if (globalRuntimeConfig && globalRuntimeConfig.checkers?.runtime?.enabled === false) {
-              return targetMethod.apply(thisArg, argumentsList);
-            }
-            const runtimeRules = globalRuntimeConfig?.checkers?.runtime?.rules;
-
-            const start = performance.now();
-            
-            // Frequency tracking
-            const methodKey = `${target.name || 'Component'}.${name}`;
+          if (runtimeRuleEnabled('TEMPLATE_METHOD_CALL')) {
             const now = Date.now();
             let stats = methodCallCounts.get(methodKey);
-            if (!stats || now - stats.lastReset > 1000) {
-              stats = { count: 0, lastReset: now };
-            }
+            if (!stats || now - stats.lastReset > 1000) stats = { count: 0, lastReset: now };
             stats.count++;
             methodCallCounts.set(methodKey, stats);
-
-            if (runtimeRules?.['TEMPLATE_METHOD_CALL'] !== false && stats.count > maxCallFrequency) {
-              const msg = `Method "${methodKey}" called ${stats.count} times in the last second.\n` +
-                `This high frequency suggests potential invocation inside a UI template (Change Detection cost) or an SRP violation.`;
-              console.warn(`⚠️ [AAET Performance Warning] ${msg}`);
-              
-              if (isAiGuardEnabled()) {
-                analyzeViolationWithAi({
-                  ruleId: 'TEMPLATE_METHOD_CALL',
-                  message: msg,
-                  className: target.name || 'Component'
-                });
-              }
-            }
-
-            try {
-              return targetMethod.apply(thisArg, argumentsList);
-            } finally {
-              const end = performance.now();
-              const duration = end - start;
-              if (runtimeRules?.['SLOW_METHOD_EXECUTION'] !== false && duration > thresholdMs) {
-                const msg = `Method "${methodKey}" execution took ${duration.toFixed(2)}ms, exceeding the threshold of ${thresholdMs}ms.`;
-                console.warn(`⚠️ [AAET Performance Warning] ${msg}`);
-                
-                if (isAiGuardEnabled()) {
-                  analyzeViolationWithAi({
-                    ruleId: 'SLOW_METHOD_EXECUTION',
-                    message: msg,
-                    className: target.name || 'Component'
-                  });
-                }
-              }
+            if (stats.count > maxCallFrequency) {
+              const message = `Method "${methodKey}" called ${stats.count} times in the last second.\n` +
+                'This high frequency suggests potential invocation inside a UI template or an SRP violation.';
+              console.warn(`⚠️ [AAET Performance Warning] ${message}`);
+              if (isAiGuardEnabled()) void analyzeViolationWithAi({ ruleId: 'TEMPLATE_METHOD_CALL', message, className: target.name || 'Component' });
             }
           }
-        });
 
-        Object.defineProperty(prototype, name, {
-          ...descriptor,
-          value: proxyMethod
-        });
-      }
+          try {
+            return targetMethod.apply(thisArg, argumentsList);
+          } finally {
+            const duration = performance.now() - start;
+            if (runtimeRuleEnabled('SLOW_METHOD_EXECUTION') && duration > thresholdMs) {
+              const message = `Method "${methodKey}" execution took ${duration.toFixed(2)}ms, exceeding the threshold of ${thresholdMs}ms.`;
+              console.warn(`⚠️ [AAET Performance Warning] ${message}`);
+              if (isAiGuardEnabled()) void analyzeViolationWithAi({ ruleId: 'SLOW_METHOD_EXECUTION', message, className: target.name || 'Component' });
+            }
+          }
+        }
+      });
+      Object.defineProperty(prototype, name, { ...descriptor, value: proxyMethod });
     }
   };
 }
 
-/**
- * Monkey-patches NgZone to measure execution time of tasks run inside the Angular Zone.
- * Logs a warning if a task blocks the main thread for too long (default >16ms, indicating frame drop).
- */
-export function setupZoneGuard(angularCore: any, thresholdMs = 16) {
-  if (globalRuntimeConfig && globalRuntimeConfig.checkers?.runtime) {
-    if (globalRuntimeConfig.checkers.runtime.enabled === false ||
-        globalRuntimeConfig.checkers.runtime.rules?.['ZONE_BLOCKING_TASK'] === false) {
-      return;
-    }
-  }
+interface MethodPatch {
+  prototype: any;
+  methodName: string;
+  original: (...args: any[]) => any;
+}
 
-  if (!angularCore) return;
-  const NgZoneClass = angularCore.NgZone;
-  if (!NgZoneClass || !NgZoneClass.prototype) return;
+let zonePatch: MethodPatch | null = null;
+let changeDetectionPatch: MethodPatch | null = null;
 
-  const originalRun = NgZoneClass.prototype.run;
-  NgZoneClass.prototype.run = function(fn: any, applyThis: any, applyArgs: any) {
+function restorePatch(patch: MethodPatch | null): void {
+  if (patch) patch.prototype[patch.methodName] = patch.original;
+}
+
+export function setupZoneGuard(angularCore: any, thresholdMs = 16): () => void {
+  const prototype = angularCore?.NgZone?.prototype;
+  if (!prototype || typeof prototype.run !== 'function') return () => undefined;
+  restorePatch(zonePatch);
+  const original = prototype.run;
+  prototype.run = function(...args: any[]) {
     const start = performance.now();
     try {
-      return originalRun.apply(this, arguments);
+      return original.apply(this, args);
     } finally {
       const duration = performance.now() - start;
       if (duration > thresholdMs) {
-        const msg = `Task executed inside Angular Zone took ${duration.toFixed(2)}ms, exceeding the ${thresholdMs}ms frame threshold.\n` +
-          `This may drop rendering frames. Consider running heavy computations outside Angular using runOutsideAngular() or delegating to Web Workers.`;
-        console.warn(`⚠️ [AAET Zone Warning] ${msg}`);
-        
-        if (isAiGuardEnabled()) {
-          analyzeViolationWithAi({
-            ruleId: 'ZONE_BLOCKING_TASK',
-            message: msg,
-            className: 'NgZone'
-          });
-        }
+        const message = `Task executed inside Angular Zone took ${duration.toFixed(2)}ms, exceeding the ${thresholdMs}ms frame threshold.\n` +
+          'Consider running heavy work outside Angular or in a Web Worker.';
+        console.warn(`⚠️ [AAET Zone Warning] ${message}`);
+        if (isAiGuardEnabled()) void analyzeViolationWithAi({ ruleId: 'ZONE_BLOCKING_TASK', message, className: 'NgZone' });
       }
+    }
+  };
+  zonePatch = { prototype, methodName: 'run', original };
+  let tornDown = false;
+  return () => {
+    if (tornDown) return;
+    tornDown = true;
+    if (zonePatch?.prototype === prototype) {
+      restorePatch(zonePatch);
+      zonePatch = null;
     }
   };
 }
 
-/**
- * Monkey-patches Angular's ApplicationRef to monitor the frequency of Change Detection cycles.
- * Logs a warning if the number of ticks per second exceeds the maxTicksPerSecond threshold.
- */
-export function setupChangeDetectionGuard(angularCore: any, maxTicksPerSecond = 20) {
-  if (globalRuntimeConfig && globalRuntimeConfig.checkers?.runtime) {
-    if (globalRuntimeConfig.checkers.runtime.enabled === false ||
-        globalRuntimeConfig.checkers.runtime.rules?.['EXCESSIVE_CHANGE_DETECTION'] === false) {
-      return;
-    }
-  }
-
-  if (!angularCore) return;
-  const AppRef = angularCore.ApplicationRef;
-  if (!AppRef || !AppRef.prototype) return;
-
-  const originalTick = AppRef.prototype.tick;
+export function setupChangeDetectionGuard(angularCore: any, maxTicksPerSecond = 20): () => void {
+  const prototype = angularCore?.ApplicationRef?.prototype;
+  if (!prototype || typeof prototype.tick !== 'function') return () => undefined;
+  restorePatch(changeDetectionPatch);
+  const original = prototype.tick;
   let tickCount = 0;
   let lastReset = Date.now();
-
-  AppRef.prototype.tick = function() {
+  prototype.tick = function(...args: any[]) {
     const now = Date.now();
     if (now - lastReset > 1000) {
       tickCount = 0;
       lastReset = now;
     }
     tickCount++;
-
     if (tickCount > maxTicksPerSecond) {
-      const msg = `Excessive Change Detection loops detected! Tick count: ${tickCount} in the last second.\n` +
-        `This suggests cyclical triggers, unoptimized template bindings, or microtasks firing repeatedly inside Zone.js.`;
-      console.warn(`⚠️ [AAET Change Detection Warning] ${msg}`);
-      
-      if (isAiGuardEnabled()) {
-        analyzeViolationWithAi({
-          ruleId: 'EXCESSIVE_CHANGE_DETECTION',
-          message: msg,
-          className: 'ApplicationRef'
-        });
-      }
+      const message = `Excessive Change Detection loops detected! Tick count: ${tickCount} in the last second.\n` +
+        'This suggests cyclical triggers, unoptimized bindings, or frequent microtasks.';
+      console.warn(`⚠️ [AAET Change Detection Warning] ${message}`);
+      if (isAiGuardEnabled()) void analyzeViolationWithAi({ ruleId: 'EXCESSIVE_CHANGE_DETECTION', message, className: 'ApplicationRef' });
     }
-    return originalTick.apply(this, arguments);
+    return original.apply(this, args);
+  };
+  changeDetectionPatch = { prototype, methodName: 'tick', original };
+  let tornDown = false;
+  return () => {
+    if (tornDown) return;
+    tornDown = true;
+    if (changeDetectionPatch?.prototype === prototype) {
+      restorePatch(changeDetectionPatch);
+      changeDetectionPatch = null;
+    }
   };
 }

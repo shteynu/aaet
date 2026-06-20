@@ -3,5 +3,27 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
   "sourceRoot": "libs/schematics/src",
-  "targets": {}
+  "tags": ["scope:schematics", "type:library"],
+  "implicitDependencies": ["config"],
+  "targets": {
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": { "command": "npx tsc -p libs/schematics/tsconfig.lib.json --noEmit" }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": { "command": "npx vitest run libs/schematics/src/ng-add/ng-add.spec.ts" }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "node -e \"require('fs').rmSync('dist/libs/schematics',{recursive:true,force:true})\"",
+          "npx tsup libs/schematics/src/ng-add/index.ts --format cjs --dts --out-dir dist/libs/schematics/ng-add",
+          "node -e \"require('fs').cpSync('libs/schematics/src/collection.json','dist/libs/schematics/collection.json'); require('fs').cpSync('libs/schematics/src/ng-add/schema.json','dist/libs/schematics/ng-add/schema.json')\""
+        ],
+        "parallel": false
+      }
+    }
+  }
 }

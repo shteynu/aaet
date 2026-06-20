@@ -3,6 +3,7 @@ import { ConfigManager } from '../context/config-manager';
 
 export interface Violation {
   ruleId: string;
+  severity?: 'warn' | 'error';
   message: string;
   file: string;
   line: number;

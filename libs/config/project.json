@@ -1,0 +1,31 @@
+{
+  "name": "config",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "libs/config/src",
+  "tags": ["scope:shared", "type:config"],
+  "targets": {
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "npx tsc -p libs/config/tsconfig.lib.json --noEmit"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "npx vitest run libs/config/src/config.spec.ts"
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "node -e \"require('fs').rmSync('dist/libs/config',{recursive:true,force:true})\"",
+          "npx tsup libs/config/src/index.ts --format cjs,esm --dts --out-dir dist/libs/config"
+        ],
+        "parallel": false
+      }
+    }
+  }
+}

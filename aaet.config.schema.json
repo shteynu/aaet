@@ -1,0 +1,560 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aaet.dev/schemas/aaet.config.schema.json",
+  "title": "AAET Configuration",
+  "type": "object",
+  "required": [
+    "version",
+    "preset",
+    "layers",
+    "layerRestrictions",
+    "checkers"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "const": 2
+    },
+    "preset": {
+      "enum": [
+        "recommended",
+        "strict"
+      ]
+    },
+    "layers": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "layerRestrictions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "from",
+          "cannotDependOn"
+        ],
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "cannotDependOn": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "checkers": {
+      "type": "object",
+      "required": [
+        "static",
+        "runtime",
+        "ai"
+      ],
+      "properties": {
+        "static": {
+          "type": "object",
+          "required": [
+            "enabled",
+            "rules",
+            "settings"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "rules": {
+              "type": "object",
+              "properties": {
+                "STRICT_LAYERING": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "MAX_DI_LIMIT": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "ONE_SHOT_CONTEXT_LIMIT": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "EXPLICIT_TOKEN_ECONOMY": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "LEGACY_DECORATOR": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "MODERN_QUERY": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "FORBID_RAW_RXJS_UI": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "ENFORCE_ONPUSH": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "ENFORCE_STANDALONE": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "UNSAFE_MANUAL_SUBSCRIBE": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "PLATFORM_ISOLATION_VIOLATION": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "SWITCH_STRATEGY_SMELL": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "TIGHT_COUPLING_OBSERVER_SMELL": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "TEMPLATE_METHOD_CALL": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "LEGACY_TEMPLATE_CONTROL_FLOW": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "ROUTING_LAZY_LOAD_VIOLATION": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "DEFER_LAZY_LOAD_VIOLATION": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "settings": {
+              "type": "object",
+              "required": [
+                "maxAllowedDI",
+                "maxLines"
+              ],
+              "properties": {
+                "maxAllowedDI": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "maxLines": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "required": [
+            "enabled",
+            "rules",
+            "settings"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "rules": {
+              "type": "object",
+              "properties": {
+                "RXJS_SUBSCRIPTION_LEAK": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "STRICT_LAYERING": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "TEMPLATE_METHOD_CALL": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "SLOW_METHOD_EXECUTION": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "ZONE_BLOCKING_TASK": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "EXCESSIVE_CHANGE_DETECTION": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "MUTABLE_SIGNAL_IN_COMPUTED": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "settings": {
+              "type": "object",
+              "required": [
+                "stackDepth",
+                "samplingRate",
+                "slowMethodThresholdMs",
+                "maxCallFrequency",
+                "zoneThresholdMs",
+                "maxTicksPerSecond"
+              ],
+              "properties": {
+                "stackDepth": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "samplingRate": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "slowMethodThresholdMs": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "maxCallFrequency": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "zoneThresholdMs": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "maxTicksPerSecond": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "ai": {
+          "type": "object",
+          "required": [
+            "enabled",
+            "rules",
+            "settings"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "rules": {
+              "type": "object",
+              "properties": {
+                "AI_VERIFY_DECORATOR": {
+                  "oneOf": [
+                    {
+                      "enum": [
+                        "off",
+                        "warn",
+                        "error"
+                      ]
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "settings": {
+              "type": "object",
+              "required": [
+                "provider",
+                "apiKeyEnv",
+                "autoAnalyze"
+              ],
+              "properties": {
+                "provider": {
+                  "enum": [
+                    "openai",
+                    "anthropic"
+                  ]
+                },
+                "endpointUrl": {
+                  "type": "string"
+                },
+                "apiKeyEnv": {
+                  "type": "string"
+                },
+                "customRules": {
+                  "type": "string"
+                },
+                "autoAnalyze": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": true
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}

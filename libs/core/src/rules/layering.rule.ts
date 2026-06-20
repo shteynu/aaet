@@ -34,8 +34,7 @@ export class LayeringRule implements Rule {
     }
 
     // 2. Check SOLID DI Limits (maxAllowedDI)
-    const limits = configManager.getConfig().limits;
-    const maxAllowedDI = limits ? limits.maxAllowedDI : 3;
+    const maxAllowedDI = configManager.getConfig().checkers.static.settings.maxAllowedDI;
 
     const classes = context.getNodes<ts.ClassDeclaration>(ts.SyntaxKind.ClassDeclaration);
     for (const node of classes) {

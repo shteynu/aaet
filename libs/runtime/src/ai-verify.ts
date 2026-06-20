@@ -1,5 +1,5 @@
 import { analyzeViolationWithAi, isAiGuardEnabled } from './ai-guard';
-import { globalRuntimeConfig } from './config-state';
+import { getRuntimeConfig, isConfiguredCheckerEnabled, isConfiguredRuleEnabled } from './config-state';
 
 export interface AiVerifyOptions {
   customRules?: string;
@@ -17,11 +17,13 @@ export function AiVerify(options: AiVerifyOptions = {}) {
     const newConstructor: any = function(...args: any[]) {
       const instance = new original(...args);
       
-      const isVerifyEnabled = globalRuntimeConfig ? (globalRuntimeConfig.checkers?.runtime?.enabled !== false && globalRuntimeConfig.checkers?.runtime?.rules?.['AI_VERIFY_DECORATOR'] !== false) : true;
+      const isVerifyEnabled = getRuntimeConfig() === null || (
+        isConfiguredCheckerEnabled('ai') && isConfiguredRuleEnabled('ai', 'AI_VERIFY_DECORATOR')
+      );
 
       if (isAiGuardEnabled() && isVerifyEnabled && !checked) {
         checked = true;
-        analyzeViolationWithAi({
+        void analyzeViolationWithAi({
           ruleId: 'AI_VERIFY_DECORATOR',
           message: `Class "${target.name}" is decorated with @AiVerify. Perform a general review of its design pattern and modern Angular usage.`,
           className: target.name,

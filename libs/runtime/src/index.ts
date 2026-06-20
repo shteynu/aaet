@@ -4,71 +4,95 @@ export * from './rxjs-guard';
 export * from './signal-guard';
 export * from './ai-guard';
 export * from './ai-verify';
+export * from './config-state';
 
-import { setupDiGuard } from './di-guard';
-import { setupRxjsGuard, setupRxjsComponentTracking } from './rxjs-guard';
-import { setupZoneGuard, setupChangeDetectionGuard } from './performance-guard';
-import { setupSignalGuard } from './signal-guard';
+import { EffectiveAaetConfig, getRuleSettings, isCheckerEnabled, isRuleEnabled } from '@aaet/config';
 import { setupAiGuard } from './ai-guard';
-import { setRuntimeConfig } from './config-state';
-export { globalRuntimeConfig, setRuntimeConfig } from './config-state';
+import { clearRuntimeConfig, setRuntimeConfig } from './config-state';
+import { setupDiGuard } from './di-guard';
+import { setupChangeDetectionGuard, setupZoneGuard } from './performance-guard';
+import { setupRxjsComponentTracking, setupRxjsGuard } from './rxjs-guard';
+import { setupSignalGuard } from './signal-guard';
 
-export function setupAaetRuntime(config: any, angularCore: any, ObservableClass?: any) {
-  // Normalize if checkers config doesn't exist
-  if (config && !config.checkers) {
-    config.checkers = {
-      static: { enabled: true },
-      runtime: { enabled: true },
-      ai: { enabled: config.aiGuard?.enabled ?? false }
+export interface AaetRuntimeAdapters {
+  angularCore: any;
+  ObservableClass?: any;
+  aiApiKey?: string;
+}
+
+export interface AaetRuntimeController {
+  readonly config: EffectiveAaetConfig;
+  teardown(): void;
+}
+
+let activeController: AaetRuntimeController | null = null;
+
+function asTeardown(value: unknown): (() => void) | null {
+  return typeof value === 'function' ? value as () => void : null;
+}
+
+export function setupAaetRuntime(config: unknown, adapters: AaetRuntimeAdapters): AaetRuntimeController;
+export function setupAaetRuntime(config: unknown, angularCore: any, ObservableClass?: any): AaetRuntimeController;
+export function setupAaetRuntime(
+  config: unknown,
+  adaptersOrAngularCore: any,
+  legacyObservableClass?: any
+): AaetRuntimeController {
+  activeController?.teardown();
+  const effectiveConfig = setRuntimeConfig(config);
+  const adapters: AaetRuntimeAdapters = adaptersOrAngularCore && 'angularCore' in adaptersOrAngularCore
+    ? adaptersOrAngularCore as AaetRuntimeAdapters
+    : { angularCore: adaptersOrAngularCore, ObservableClass: legacyObservableClass };
+  const teardowns: Array<() => void> = [];
+
+  if (isCheckerEnabled(effectiveConfig, 'ai')) {
+    const aiSettings = getRuleSettings(effectiveConfig, 'ai');
+    setupAiGuard({ enabled: true, ...aiSettings, apiKey: adapters.aiApiKey });
+    teardowns.push(() => setupAiGuard({ enabled: false }));
+  } else {
+    setupAiGuard({ enabled: false });
+  }
+
+  if (isCheckerEnabled(effectiveConfig, 'runtime')) {
+    const settings = getRuleSettings(effectiveConfig, 'runtime');
+    const add = (teardown: unknown): void => {
+      const callback = asTeardown(teardown);
+      if (callback) teardowns.push(callback);
     };
-  }
-
-  setRuntimeConfig(config);
-
-  if (!config) return;
-
-  // Initialize AI Guard
-  const aiConfig = config.checkers?.ai || config.aiGuard;
-  if (aiConfig && aiConfig.enabled) {
-    setupAiGuard(aiConfig, angularCore);
-  }
-
-  // Check if runtime checker is enabled
-  const runtimeConfig = config.checkers?.runtime;
-  if (runtimeConfig?.enabled === false) {
-    return;
-  }
-
-  const rules = runtimeConfig?.rules || {};
-
-  // 1. DI Guard (STRICT_LAYERING)
-  if (rules['STRICT_LAYERING'] !== false) {
-    setupDiGuard(config, angularCore);
-  }
-
-  // 2. RxJS Guard (RXJS_SUBSCRIPTION_LEAK)
-  if (rules['RXJS_SUBSCRIPTION_LEAK'] !== false) {
-    if (ObservableClass) {
-      setupRxjsGuard(ObservableClass, {
-        stackDepth: runtimeConfig?.stackDepth,
-        samplingRate: runtimeConfig?.samplingRate
-      });
+    if (isRuleEnabled(effectiveConfig, 'runtime', 'STRICT_LAYERING')) {
+      add(setupDiGuard(effectiveConfig, adapters.angularCore));
     }
-    setupRxjsComponentTracking(angularCore);
+    if (isRuleEnabled(effectiveConfig, 'runtime', 'RXJS_SUBSCRIPTION_LEAK')) {
+      if (adapters.ObservableClass) {
+        add(setupRxjsGuard(adapters.ObservableClass, {
+          stackDepth: settings.stackDepth,
+          samplingRate: settings.samplingRate
+        }));
+      }
+      add(setupRxjsComponentTracking(adapters.angularCore));
+    }
+    if (isRuleEnabled(effectiveConfig, 'runtime', 'ZONE_BLOCKING_TASK')) {
+      add(setupZoneGuard(adapters.angularCore, settings.zoneThresholdMs));
+    }
+    if (isRuleEnabled(effectiveConfig, 'runtime', 'EXCESSIVE_CHANGE_DETECTION')) {
+      add(setupChangeDetectionGuard(adapters.angularCore, settings.maxTicksPerSecond));
+    }
+    if (isRuleEnabled(effectiveConfig, 'runtime', 'MUTABLE_SIGNAL_IN_COMPUTED')) {
+      add(setupSignalGuard(adapters.angularCore));
+    }
   }
 
-  // 3. Zone Guard (ZONE_BLOCKING_TASK)
-  if (rules['ZONE_BLOCKING_TASK'] !== false) {
-    setupZoneGuard(angularCore);
-  }
-
-  // 4. Change Detection Guard (EXCESSIVE_CHANGE_DETECTION)
-  if (rules['EXCESSIVE_CHANGE_DETECTION'] !== false) {
-    setupChangeDetectionGuard(angularCore);
-  }
-
-  // 5. Signal Guard (MUTABLE_SIGNAL_IN_COMPUTED)
-  if (rules['MUTABLE_SIGNAL_IN_COMPUTED'] !== false) {
-    setupSignalGuard(angularCore);
-  }
+  let tornDown = false;
+  const controller: AaetRuntimeController = {
+    config: effectiveConfig,
+    teardown(): void {
+      if (tornDown) return;
+      tornDown = true;
+      for (const teardown of teardowns.reverse()) teardown();
+      clearRuntimeConfig();
+      if (activeController === controller) activeController = null;
+    }
+  };
+  activeController = controller;
+  return controller;
 }

@@ -2,16 +2,16 @@ import { describe, it, expect, vi } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as ts from 'typescript';
-import { runStaticAnalysis, handleAiCheckRequest, getOrCreateConfigManager, AaetWebpackPlugin, aaetEslintRule } from '../../../libs/core/src/index';
-import { ConfigManager } from '../../../libs/core/src/context/config-manager';
-import { setupDiGuard, resetDiGuard, ProfileMethods, setupRxjsGuard, getActiveSubscriptions, clearActiveSubscriptions, setupSignalGuard, setupZoneGuard, setupAiGuard, AiVerify, setupChangeDetectionGuard, setupRxjsComponentTracking, getActiveComponentsCount, clearActiveComponents, activeSubscriptions, analyzeViolationWithAi } from '../../../libs/runtime/src/index';
+import { AaetWebpackPlugin, ConfigManager, aaetEslintRule, getOrCreateConfigManager, handleAiCheckRequest, runStaticAnalysis, runStaticAnalysisForSourceFile } from '@aaet/core';
+import { AiVerify, ProfileMethods, activeSubscriptions, analyzeViolationWithAi, clearActiveComponents, clearActiveSubscriptions, getActiveComponentsCount, getActiveSubscriptions, resetDiGuard, setupAaetRuntime, setupAiGuard, setupChangeDetectionGuard, setupDiGuard, setupRxjsComponentTracking, setupRxjsGuard, setupSignalGuard, setupZoneGuard } from '@aaet/runtime';
+import { normalizeAaetConfig } from '@aaet/config';
 
 describe('AAET Static Analysis Engine', () => {
   const projectRoot = path.resolve(__dirname, '../../..');
 
   it('should detect all violations in stub-component.ts and app.routes.ts', () => {
-    const stubComponentFile = path.resolve(__dirname, 'stub-component.ts');
-    const appRoutesFile = path.resolve(__dirname, 'app.routes.ts');
+    const stubComponentFile = path.resolve(__dirname, '../fixtures/violations/stub-component.ts');
+    const appRoutesFile = path.resolve(__dirname, '../fixtures/violations/app.routes.ts');
 
     const violations = runStaticAnalysis(projectRoot, [stubComponentFile, appRoutesFile]);
 
@@ -200,7 +200,7 @@ describe('AAET Runtime Validator', () => {
 
     component.slowMethod();
     expect(consoleWarnSpy).toHaveBeenCalled();
-    let durationWarningLogged = consoleWarnSpy.mock.calls.some(call => 
+    const durationWarningLogged = consoleWarnSpy.mock.calls.some(call =>
       call[0].includes('exceeding the threshold')
     );
     expect(durationWarningLogged).toBe(true);
@@ -212,7 +212,7 @@ describe('AAET Runtime Validator', () => {
     component.fastMethod();
     component.fastMethod(); // 4 calls (> max 2)
 
-    let frequencyWarningLogged = consoleWarnSpy.mock.calls.some(call => 
+    const frequencyWarningLogged = consoleWarnSpy.mock.calls.some(call =>
       call[0].includes('times in the last second')
     );
     expect(frequencyWarningLogged).toBe(true);
@@ -306,7 +306,9 @@ describe('AAET Runtime Validator', () => {
     // Slow task - warning!
     zone.run(() => {
       const start = Date.now();
-      while (Date.now() - start < 10) {}
+      while (Date.now() - start < 10) {
+        // Deliberately block the event loop for the runtime guard fixture.
+      }
     });
 
     expect(consoleWarnSpy).toHaveBeenCalled();
@@ -324,8 +326,8 @@ describe('AAET AI Guard & Verification Engine', () => {
     
     const fallbackConfigManager = new ConfigManager('/non-existent-dir-for-fallback');
     const fallbackConfig = fallbackConfigManager.getConfig();
-    expect(fallbackConfig.aiGuard?.enabled).toBe(false);
-    expect(fallbackConfig.aiGuard?.provider).toBe('anthropic');
+    expect(fallbackConfig.checkers.ai.enabled).toBe(false);
+    expect(fallbackConfig.checkers.ai.settings.provider).toBe('anthropic');
   });
 
   it('should call handleAiCheckRequest for Claude and OpenAI requests', async () => {
@@ -359,6 +361,15 @@ describe('AAET AI Guard & Verification Engine', () => {
     expect(openaiRes.suggestion).toBe('Use a Facade');
 
     fetchSpy.mockRestore();
+  });
+
+  it('should reject AI source paths outside the configured workspace', async () => {
+    await expect(handleAiCheckRequest(
+      { filePath: '../outside.ts', ruleId: 'STRICT_LAYERING' },
+      'mock-key',
+      'anthropic',
+      { workspaceRoot: projectRoot }
+    )).rejects.toThrow('must remain inside');
   });
 
   it('should execute setupAiGuard and intercept DI violation to trigger analyzeViolationWithAi', async () => {
@@ -723,7 +734,7 @@ describe('AAET AI Guard & Verification Engine', () => {
 
   it('should run custom ESLint rule utilizing parserServices.program to report violations', () => {
     const mockReport = vi.fn();
-    const testFile = path.resolve(projectRoot, 'apps/demo-app/src/stub-component.ts');
+    const testFile = path.resolve(projectRoot, 'apps/demo-app/fixtures/violations/stub-component.ts');
     
     const content = fs.readFileSync(testFile, 'utf8');
     const sourceFile = ts.createSourceFile(
@@ -758,7 +769,7 @@ describe('AAET AI Guard & Verification Engine', () => {
 
   describe('AAET Checker Configuration & Dynamic Disabling', () => {
     it('should respect disabled static rules and not report violations for them', () => {
-      const stubComponentFile = path.resolve(__dirname, 'stub-component.ts');
+      const stubComponentFile = path.resolve(__dirname, '../fixtures/violations/stub-component.ts');
       const content = fs.readFileSync(stubComponentFile, 'utf8');
       const sourceFile = ts.createSourceFile(
         stubComponentFile,
@@ -768,7 +779,7 @@ describe('AAET AI Guard & Verification Engine', () => {
       );
 
       const customConfigManager = new ConfigManager(projectRoot);
-      vi.spyOn(customConfigManager, 'getConfig').mockReturnValue({
+      vi.spyOn(customConfigManager, 'getConfig').mockReturnValue(normalizeAaetConfig({
         layers: { ui: '**/*component.ts' },
         layerRestrictions: [],
         limits: { maxAllowedDI: 3, maxLines: 400 },
@@ -781,7 +792,7 @@ describe('AAET AI Guard & Verification Engine', () => {
             }
           }
         }
-      });
+      }));
 
       const violations = runStaticAnalysisForSourceFile(sourceFile, stubComponentFile, customConfigManager);
       const ruleIds = violations.map(v => v.ruleId);
@@ -790,7 +801,7 @@ describe('AAET AI Guard & Verification Engine', () => {
     });
 
     it('should skip static analysis entirely if static checker is disabled', () => {
-      const stubComponentFile = path.resolve(__dirname, 'stub-component.ts');
+      const stubComponentFile = path.resolve(__dirname, '../fixtures/violations/stub-component.ts');
       const content = fs.readFileSync(stubComponentFile, 'utf8');
       const sourceFile = ts.createSourceFile(
         stubComponentFile,
@@ -800,7 +811,7 @@ describe('AAET AI Guard & Verification Engine', () => {
       );
 
       const customConfigManager = new ConfigManager(projectRoot);
-      vi.spyOn(customConfigManager, 'getConfig').mockReturnValue({
+      vi.spyOn(customConfigManager, 'getConfig').mockReturnValue(normalizeAaetConfig({
         layers: { ui: '**/*component.ts' },
         layerRestrictions: [],
         limits: { maxAllowedDI: 3, maxLines: 400 },
@@ -809,7 +820,7 @@ describe('AAET AI Guard & Verification Engine', () => {
             enabled: false
           }
         }
-      });
+      }));
 
       const violations = runStaticAnalysisForSourceFile(sourceFile, stubComponentFile, customConfigManager);
       expect(violations.length).toBe(0);
@@ -843,16 +854,62 @@ describe('AAET AI Guard & Verification Engine', () => {
         Injector: MockInjector
       };
 
-      const { setupAaetRuntime } = require('../../../libs/runtime/src/index');
-      setupAaetRuntime(config, mockAngularCore);
+      const controller = setupAaetRuntime(config, mockAngularCore);
 
       class StubComponent {}
       const injector = new MockInjector();
       injector.get(StubComponent);
 
       expect(consoleErrorSpy).not.toHaveBeenCalled();
+      controller.teardown();
+      consoleErrorSpy.mockRestore();
+    });
+
+    it('should restore runtime patches during teardown', () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      class ApiService {}
+      class MockInjector {
+        get(token: any): any {
+          if (token.name === 'TrackedComponent') this.get(ApiService);
+          return {};
+        }
+      }
+      const angularCore = { isDevMode: () => true, Injector: MockInjector };
+      const controller = setupAaetRuntime({
+        preset: 'strict',
+        layers: { ui: '**/*component.ts', api: '**/*api.service.ts' },
+        layerRestrictions: [{ from: 'ui', cannotDependOn: ['api'] }],
+        checkers: { runtime: { enabled: true } }
+      }, angularCore);
+      class TrackedComponent {}
+      const injector = new MockInjector();
+
+      injector.get(TrackedComponent);
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      controller.teardown();
+      injector.get(TrackedComponent);
+      expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+      consoleErrorSpy.mockRestore();
+    });
+
+    it('should tear down the previous controller when runtime is reconfigured', () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      class ApiService {}
+      class MockInjector {
+        get(token: any): any {
+          if (token.name === 'ReconfiguredComponent') this.get(ApiService);
+          return {};
+        }
+      }
+      const angularCore = { isDevMode: () => true, Injector: MockInjector };
+      setupAaetRuntime({ preset: 'strict', checkers: { runtime: { enabled: true } } }, angularCore);
+      const disabledController = setupAaetRuntime({ checkers: { runtime: { enabled: false } } }, angularCore);
+      class ReconfiguredComponent {}
+
+      new MockInjector().get(ReconfiguredComponent);
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+      disabledController.teardown();
       consoleErrorSpy.mockRestore();
     });
   });
 });
-

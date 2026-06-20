@@ -3,5 +3,26 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
   "sourceRoot": "libs/runtime/src",
-  "targets": {}
+  "tags": ["scope:runtime", "type:experimental"],
+  "implicitDependencies": ["config"],
+  "targets": {
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": { "command": "npx tsc -p libs/runtime/tsconfig.lib.json --noEmit" }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": { "command": "npx vitest run apps/demo-app/src/aaet.spec.ts --testNamePattern=\"AAET Runtime Validator|AAET AI Guard\"" }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "node -e \"require('fs').rmSync('dist/libs/runtime',{recursive:true,force:true})\"",
+          "npx tsup libs/runtime/src/index.ts --format cjs,esm --dts --out-dir dist/libs/runtime"
+        ],
+        "parallel": false
+      }
+    }
+  }
 }

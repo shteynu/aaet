@@ -8,6 +8,7 @@ import { AiReadinessRule } from './rules/ai-readiness.rule';
 import { ParadigmRule } from './rules/paradigm.rule';
 import { PerformanceRule } from './rules/performance.rule';
 import { PatternsRule } from './rules/patterns.rule';
+import { getRuleSeverity, isCheckerEnabled, isRuleEnabled } from '@aaet/config';
 
 export * from './ai-check.server';
 export * from './context/config-manager';
@@ -15,19 +16,20 @@ export * from './plugins/vite-plugin';
 export * from './plugins/webpack-plugin';
 export * from './eslint/eslint-rule';
 
-let sharedConfigManager: ConfigManager | null = null;
+const sharedConfigManagers = new Map<string, ConfigManager>();
 
 export function getOrCreateConfigManager(projectRoot: string): ConfigManager {
-  if (!sharedConfigManager) {
-    sharedConfigManager = new ConfigManager(projectRoot);
+  const normalizedRoot = path.resolve(projectRoot);
+  let manager = sharedConfigManagers.get(normalizedRoot);
+  if (!manager) {
+    manager = new ConfigManager(normalizedRoot);
+    sharedConfigManagers.set(normalizedRoot, manager);
   }
-  return sharedConfigManager;
+  return manager;
 }
 
 export function invalidateFileCache(filePath: string) {
-  if (sharedConfigManager) {
-    sharedConfigManager.invalidateFile(filePath);
-  }
+  for (const manager of sharedConfigManagers.values()) manager.invalidateFile(filePath);
 }
 
 export function runStaticAnalysisForSourceFile(
@@ -36,18 +38,14 @@ export function runStaticAnalysisForSourceFile(
   configManager: ConfigManager
 ): Violation[] {
   const config = configManager.getConfig();
-  const staticConfig = config.checkers?.static;
+  if (!isCheckerEnabled(config, 'static')) return [];
 
-  if (staticConfig?.enabled === false) {
-    return [];
-  }
-
-  const rules: Rule[] = [
-    new LayeringRule(),
-    new AiReadinessRule(),
-    new ParadigmRule(),
-    new PerformanceRule(),
-    new PatternsRule()
+  const ruleGroups: Array<{ rule: Rule; ids: string[] }> = [
+    { rule: new LayeringRule(), ids: ['STRICT_LAYERING', 'MAX_DI_LIMIT'] },
+    { rule: new AiReadinessRule(), ids: ['ONE_SHOT_CONTEXT_LIMIT', 'EXPLICIT_TOKEN_ECONOMY'] },
+    { rule: new ParadigmRule(), ids: ['LEGACY_DECORATOR', 'MODERN_QUERY', 'FORBID_RAW_RXJS_UI', 'ENFORCE_ONPUSH', 'ENFORCE_STANDALONE', 'UNSAFE_MANUAL_SUBSCRIBE', 'PLATFORM_ISOLATION_VIOLATION'] },
+    { rule: new PerformanceRule(), ids: ['TEMPLATE_METHOD_CALL', 'LEGACY_TEMPLATE_CONTROL_FLOW', 'ROUTING_LAZY_LOAD_VIOLATION', 'DEFER_LAZY_LOAD_VIOLATION'] },
+    { rule: new PatternsRule(), ids: ['SWITCH_STRATEGY_SMELL', 'TIGHT_COUPLING_OBSERVER_SMELL'] }
   ];
 
   const nodesByKind = new Map<ts.SyntaxKind, ts.Node[]>();
@@ -72,18 +70,12 @@ export function runStaticAnalysisForSourceFile(
   };
 
   const violations: Violation[] = [];
-  for (const rule of rules) {
-    const v = rule.run(context);
-    violations.push(...v);
-  }
-
-  if (staticConfig?.rules) {
-    return violations.filter(v => {
-      if (staticConfig.rules![v.ruleId] !== undefined) {
-        return staticConfig.rules![v.ruleId];
-      }
-      return true;
-    });
+  for (const group of ruleGroups) {
+    if (!group.ids.some(id => isRuleEnabled(config, 'static', id))) continue;
+    for (const violation of group.rule.run(context)) {
+      const ruleSeverity = getRuleSeverity(config, 'static', violation.ruleId);
+      if (ruleSeverity !== 'off') violations.push({ ...violation, severity: ruleSeverity });
+    }
   }
 
   return violations;
@@ -126,10 +118,16 @@ function getFilesRecursive(dir: string): string[] {
     const filePath = path.resolve(dir, file);
     const stat = fs.statSync(filePath);
     if (stat && stat.isDirectory()) {
-      if (file !== 'node_modules' && file !== 'dist' && file !== '.git') {
+      const isViolationFixture = file === 'violations' && path.basename(dir) === 'fixtures';
+      if (!isViolationFixture && file !== 'node_modules' && file !== 'dist' && file !== '.git') {
         results.push(...getFilesRecursive(filePath));
       }
-    } else if (file.endsWith('.ts') && !file.endsWith('.d.ts')) {
+    } else if (
+      file.endsWith('.ts') &&
+      !file.endsWith('.d.ts') &&
+      !file.endsWith('.spec.ts') &&
+      !file.endsWith('.test.ts')
+    ) {
       results.push(filePath);
     }
   }
@@ -153,8 +151,12 @@ function generateAiContextFile(targetDir: string) {
     restrictionsList += `- **\`${r.from}\`** cannot depend on: ${r.cannotDependOn.map(l => `\`${l}\``).join(', ')}\n`;
   });
 
-  const maxAllowedDI = config.limits?.maxAllowedDI ?? 3;
-  const maxLines = config.limits?.maxLines ?? 400;
+  const maxAllowedDI = config.checkers.static.settings.maxAllowedDI;
+  const maxLines = config.checkers.static.settings.maxLines;
+  const enabledStaticRules = Object.entries(config.checkers.static.rules)
+    .filter(([, severity]) => severity !== 'off')
+    .map(([ruleId, severity]) => `- **${ruleId}:** ${severity}`)
+    .join('\n');
 
   const content = `# AAET Workspace Architecture Context
 This file describes the architectural rules and best practices enforced in this project. Use this context when generating or refactoring Angular code.
@@ -170,6 +172,10 @@ ${layersTable}
 ${restrictionsList}
 
 ## Coding Standards & Limits
+- **Preset:** ${config.preset}
+- **Static checker:** ${config.checkers.static.enabled ? 'enabled' : 'disabled'}
+- **Runtime checker:** ${config.checkers.runtime.enabled ? 'enabled (experimental)' : 'disabled'}
+- **AI checker:** ${config.checkers.ai.enabled ? 'enabled' : 'disabled'}
 - **Max Dependency Injections per class:** ${maxAllowedDI} (constructors + \`inject()\` combined)
 - **Max Lines per File:** ${maxLines} (to keep files clean and context-efficient)
 - **Modern Angular Syntax:**
@@ -180,7 +186,7 @@ ${restrictionsList}
   - Forbid direct browser global variable access (\`window\`, \`document\`, \`localStorage\`) outside SSR-safe contexts (e.g. \`afterRender\`, \`isPlatformBrowser\`).
 - **RxJS Memory Safety & Leak Detection:**
   - Forbid manual \`.subscribe()\` calls without \`takeUntilDestroyed()\` or \`takeUntil(this.destroy$)\`. Prefer using the async template pipe or \`toSignal()\`.
-  - Active runtime tracking monitors and reports active RxJS subscription leaks during component destruction.
+  - Runtime leak tracking is ${config.checkers.runtime.enabled ? 'enabled experimentally' : 'disabled'}.
 - **Template & Rendering Performance:**
   - Forbid method calls in templates (interpolation or property binding) to avoid execution on every Change Detection cycle. Use \`computed\` signals or pre-calculated properties instead.
   - Enforce modern Angular v17+ control flow syntax (\`@if\`, \`@for\`, \`@switch\`) instead of legacy structural directives (\`*ngIf\`, \`*ngFor\`, \`*ngSwitch\`).
@@ -195,71 +201,15 @@ ${restrictionsList}
 
 ## Enforcement Mechanisms
 - **Static Analysis (AAET CLI):** Run \`npm run analyze\` to scan the codebase for architectural, performance, and AI-readiness violations.
-- **AI Auto-Fix CLI:** Run \`npx tsx libs/core/src/index.ts --fix\` to automatically refactor violating files using OpenAI/Anthropic models.
 - **ESLint Integration:** Enforce static analysis directly inside the development workflow using custom ESLint rules.
 - **Build Integrations:** Vite and Webpack plugins validate architectural constraints during active development loops.
-- **Runtime Guards:** Real-time checking flags active subscription leaks on component destroy and provides interactive console-based \`aaet.analyze(<id>)\` suggestions.
+- **Enabled static rules:**
+${enabledStaticRules || '- None'}
 `;
 
   const outputPath = path.resolve(targetDir, '.ai-context.md');
   fs.writeFileSync(outputPath, content, 'utf8');
   console.log(`✅ [AAET AI Context] Generated context file at: ${outputPath}`);
-}
-
-// Helper to run AI Auto-Fixing
-async function runAiAutoFix(targetDir: string) {
-  const configManager = new ConfigManager(targetDir);
-  const violations = runStaticAnalysis(targetDir);
-
-  if (violations.length === 0) {
-    console.log('✅ No architectural or AI-readiness violations found! Codebase is healthy.');
-    return;
-  }
-
-  console.log(`🤖 Found ${violations.length} violations. Starting AI Auto-Fix...\n`);
-
-  // Group violations by file path
-  const violationsByFile = new Map<string, typeof violations>();
-  violations.forEach(v => {
-    const list = violationsByFile.get(v.file) || [];
-    list.push(v);
-    violationsByFile.set(v.file, list);
-  });
-
-  let fixedCount = 0;
-
-  for (const [filePath, fileViolations] of violationsByFile.entries()) {
-    const relativeFile = path.relative(targetDir, filePath);
-    console.log(`🤖 Refactoring: ${relativeFile}...`);
-
-    // Combine violation messages
-    const combinedMessage = fileViolations.map(v => `[${v.ruleId}] Line ${v.line}: ${v.message}`).join('\n');
-    const firstViolation = fileViolations[0];
-
-    try {
-      const response = await handleAiCheckRequest({
-        filePath,
-        ruleId: firstViolation.ruleId,
-        violationMessage: combinedMessage,
-        className: 'TargetFile',
-        angularVersion: configManager.getAngularVersion(),
-        workspaceType: configManager.getWorkspaceType(),
-        fullFileFix: true
-      });
-
-      if (response && response.suggestion) {
-        fs.writeFileSync(filePath, response.suggestion, 'utf8');
-        console.log(`   ✅ Successfully refactored: ${relativeFile}`);
-        fixedCount++;
-      } else {
-        console.log(`   ⚠️ No refactoring suggestion returned for: ${relativeFile}`);
-      }
-    } catch (err: any) {
-      console.error(`   ❌ Failed to fix ${relativeFile}: ${err.message}`);
-    }
-  }
-
-  console.log(`\n🎉 AI Auto-Fix completed! Successfully refactored ${fixedCount} of ${violationsByFile.size} file(s).`);
 }
 
 // Check if run directly
@@ -273,7 +223,6 @@ if (isRunDirectly) {
   const targetDir = process.cwd();
   console.log(`\n🔍 AAET: Angular Architectural Enforcement Toolkit (AI-Ready Architecture Guard)`);
 
-  const hasFixFlag = process.argv.includes('--fix') || process.argv.includes('-f');
   const hasContextFlag = process.argv.includes('--context') || process.argv.includes('-c');
 
   if (hasContextFlag) {
@@ -286,34 +235,24 @@ if (isRunDirectly) {
     }
   }
 
-  if (hasFixFlag) {
-    console.log(`Running AI Auto-Fix on: ${targetDir}\n`);
-    runAiAutoFix(targetDir)
-      .then(() => process.exit(0))
-      .catch(err => {
-        console.error(`Error running AI Auto-Fix: ${err.message}`);
-        process.exit(2);
-      });
-  } else {
-    console.log(`Running static analysis on: ${targetDir}\n`);
-    try {
-      const violations = runStaticAnalysis(targetDir);
+  console.log(`Running static analysis on: ${targetDir}\n`);
+  try {
+    const violations = runStaticAnalysis(targetDir);
 
-      if (violations.length === 0) {
-        console.log('✅ No architectural or AI-readiness violations found! Codebase is healthy.');
-        process.exit(0);
-      } else {
-        console.log(`❌ Found ${violations.length} violations:\n`);
-        violations.forEach(v => {
-          const relativeFile = path.relative(targetDir, v.file);
-          console.log(`[${v.ruleId}] ${relativeFile}:${v.line}:${v.character}`);
-          console.log(`   👉 ${v.message}\n`);
-        });
-        process.exit(1);
-      }
-    } catch (err: any) {
-      console.error(`Error running static analysis: ${err.message}`);
-      process.exit(2);
+    if (violations.length === 0) {
+      console.log('✅ No architectural or AI-readiness violations found! Codebase is healthy.');
+      process.exit(0);
+    } else {
+      console.log(`❌ Found ${violations.length} violations:\n`);
+      violations.forEach(v => {
+        const relativeFile = path.relative(targetDir, v.file);
+        console.log(`[${v.ruleId}] ${relativeFile}:${v.line}:${v.character}`);
+        console.log(`   👉 ${v.message}\n`);
+      });
+      process.exit(1);
     }
+  } catch (err: any) {
+    console.error(`Error running static analysis: ${err.message}`);
+    process.exit(2);
   }
 }

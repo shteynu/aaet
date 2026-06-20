@@ -3,6 +3,8 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "application",
   "sourceRoot": "apps/demo-app/src",
+  "tags": ["scope:demo", "type:application"],
+  "implicitDependencies": ["config", "core", "runtime"],
   "targets": {
     "test": {
       "executor": "nx:run-commands",
@@ -13,19 +15,27 @@
     "analyze": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "npx tsx libs/core/src/index.ts"
-      }
-    },
-    "fix": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "npx tsx libs/core/src/index.ts --fix"
+        "command": "npx tsx libs/core/src/cli.ts check apps/demo-app/src/clean.component.ts"
       }
     },
     "context": {
       "executor": "nx:run-commands",
       "options": {
         "command": "npx tsx libs/core/src/index.ts --context"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": { "command": "npx tsc -p apps/demo-app/tsconfig.app.json --noEmit" }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "node -e \"require('fs').rmSync('dist/apps/demo-app',{recursive:true,force:true})\"",
+          "npx tsup apps/demo-app/src/clean.component.ts --format cjs --out-dir dist/apps/demo-app"
+        ],
+        "parallel": false
       }
     }
   }

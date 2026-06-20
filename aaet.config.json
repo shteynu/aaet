@@ -7,11 +7,72 @@
   "layerRestrictions": [
     {
       "from": "ui",
-      "cannotDependOn": ["api"]
+      "cannotDependOn": [
+        "api"
+      ]
     }
   ],
-  "limits": {
-    "maxAllowedDI": 3,
-    "maxLines": 400
+  "$schema": "./aaet.config.schema.json",
+  "version": 2,
+  "preset": "strict",
+  "checkers": {
+    "static": {
+      "enabled": true,
+      "rules": {
+        "STRICT_LAYERING": "error",
+        "MAX_DI_LIMIT": "error",
+        "ONE_SHOT_CONTEXT_LIMIT": "error",
+        "EXPLICIT_TOKEN_ECONOMY": "error",
+        "LEGACY_DECORATOR": "error",
+        "MODERN_QUERY": "error",
+        "FORBID_RAW_RXJS_UI": "error",
+        "ENFORCE_ONPUSH": "error",
+        "ENFORCE_STANDALONE": "error",
+        "UNSAFE_MANUAL_SUBSCRIBE": "error",
+        "PLATFORM_ISOLATION_VIOLATION": "error",
+        "SWITCH_STRATEGY_SMELL": "warn",
+        "TIGHT_COUPLING_OBSERVER_SMELL": "warn",
+        "TEMPLATE_METHOD_CALL": "error",
+        "LEGACY_TEMPLATE_CONTROL_FLOW": "error",
+        "ROUTING_LAZY_LOAD_VIOLATION": "error",
+        "DEFER_LAZY_LOAD_VIOLATION": "error"
+      },
+      "settings": {
+        "maxAllowedDI": 3,
+        "maxLines": 400
+      }
+    },
+    "runtime": {
+      "enabled": false,
+      "rules": {
+        "RXJS_SUBSCRIPTION_LEAK": "warn",
+        "STRICT_LAYERING": "warn",
+        "TEMPLATE_METHOD_CALL": "warn",
+        "SLOW_METHOD_EXECUTION": "warn",
+        "ZONE_BLOCKING_TASK": "warn",
+        "EXCESSIVE_CHANGE_DETECTION": "warn",
+        "MUTABLE_SIGNAL_IN_COMPUTED": "warn"
+      },
+      "settings": {
+        "stackDepth": 10,
+        "samplingRate": 1,
+        "slowMethodThresholdMs": 5,
+        "maxCallFrequency": 10,
+        "zoneThresholdMs": 16,
+        "maxTicksPerSecond": 20
+      }
+    },
+    "ai": {
+      "enabled": false,
+      "rules": {
+        "AI_VERIFY_DECORATOR": "warn"
+      },
+      "settings": {
+        "provider": "anthropic",
+        "endpointUrl": "/api/aaet-ai-check",
+        "apiKeyEnv": "ANTHROPIC_API_KEY",
+        "autoAnalyze": false
+      }
+    }
   }
 }

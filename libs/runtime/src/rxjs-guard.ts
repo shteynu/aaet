@@ -1,157 +1,140 @@
 import { analyzeViolationWithAi, isAiGuardEnabled } from './ai-guard';
-import { globalRuntimeConfig } from './config-state';
 
 export const activeSubscriptions = new Map<any, { stack: string; timestamp: number }>();
-
-let rxjsStackDepth = 10;
-let rxjsSamplingRate = 1.0;
-
-/**
- * Monkey-patches RxJS Observable.prototype.subscribe to track active subscriptions
- * and detect leaks (subscriptions that are never unsubscribed).
- */
-export function setupRxjsGuard(ObservableClass: any, config?: { stackDepth?: number; samplingRate?: number }) {
-  if (globalRuntimeConfig && globalRuntimeConfig.checkers?.runtime) {
-    if (globalRuntimeConfig.checkers.runtime.enabled === false ||
-        globalRuntimeConfig.checkers.runtime.rules?.['RXJS_SUBSCRIPTION_LEAK'] === false) {
-      return;
-    }
-  }
-
-  if (!ObservableClass || !ObservableClass.prototype) {
-    return;
-  }
-
-  if (config) {
-    if (config.stackDepth !== undefined) rxjsStackDepth = config.stackDepth;
-    if (config.samplingRate !== undefined) rxjsSamplingRate = config.samplingRate;
-  }
-
-  const originalSubscribe = ObservableClass.prototype.subscribe;
-
-  ObservableClass.prototype.subscribe = function(...args: any[]) {
-    const subscription = originalSubscribe.apply(this, args);
-
-    // Apply sampling rate check
-    if (rxjsSamplingRate < 1.0 && Math.random() > rxjsSamplingRate) {
-      return subscription;
-    }
-
-    // Capture stack trace to pinpoint the subscription site with a V8 depth limit
-    const originalLimit = Error.stackTraceLimit;
-    Error.stackTraceLimit = rxjsStackDepth;
-    const err = new Error();
-    const stack = err.stack || '';
-    Error.stackTraceLimit = originalLimit;
-
-    // Register active subscription
-    activeSubscriptions.set(subscription, {
-      stack,
-      timestamp: Date.now()
-    });
-
-    const originalUnsubscribe = subscription.unsubscribe;
-    if (originalUnsubscribe) {
-      subscription.unsubscribe = function() {
-        activeSubscriptions.delete(subscription);
-        return originalUnsubscribe.apply(this, arguments);
-      };
-    }
-
-    return subscription;
-  };
-}
-
-export function getActiveSubscriptions() {
-  return Array.from(activeSubscriptions.values());
-}
-
-export function clearActiveSubscriptions() {
-  activeSubscriptions.clear();
-}
-
-let injectorPatched = false;
 export const activeComponents = new Set<any>();
 export const activeComponentCounts = new Map<any, number>();
 
-/**
- * Intercepts component resolutions via Injector to track component instances.
- * Patches the Ivy onDestroy hook on the component constructor to check for active RxJS subscriptions
- * belonging to that component class when all of its active instances are destroyed.
- */
-export function setupRxjsComponentTracking(angularCore: any) {
-  if (globalRuntimeConfig && globalRuntimeConfig.checkers?.runtime) {
-    if (globalRuntimeConfig.checkers.runtime.enabled === false ||
-        globalRuntimeConfig.checkers.runtime.rules?.['RXJS_SUBSCRIPTION_LEAK'] === false) {
-      return;
+interface ObservablePatch {
+  prototype: any;
+  originalSubscribe: (...args: any[]) => any;
+}
+
+let observablePatch: ObservablePatch | null = null;
+
+export function setupRxjsGuard(
+  ObservableClass: any,
+  config: { stackDepth?: number; samplingRate?: number } = {}
+): () => void {
+  const prototype = ObservableClass?.prototype;
+  if (!prototype || typeof prototype.subscribe !== 'function') return () => undefined;
+  if (observablePatch) observablePatch.prototype.subscribe = observablePatch.originalSubscribe;
+
+  const originalSubscribe = prototype.subscribe;
+  const stackDepth = config.stackDepth ?? 10;
+  const samplingRate = config.samplingRate ?? 1;
+  prototype.subscribe = function(...args: any[]) {
+    const subscription = originalSubscribe.apply(this, args);
+    if (samplingRate < 1 && Math.random() > samplingRate) return subscription;
+
+    const ErrorWithLimit = Error as ErrorConstructor & { stackTraceLimit?: number };
+    const originalLimit = ErrorWithLimit.stackTraceLimit;
+    let stack = '';
+    try {
+      ErrorWithLimit.stackTraceLimit = stackDepth;
+      stack = new Error().stack || '';
+    } finally {
+      ErrorWithLimit.stackTraceLimit = originalLimit;
     }
+
+    activeSubscriptions.set(subscription, { stack, timestamp: Date.now() });
+    const originalUnsubscribe = subscription?.unsubscribe;
+    if (typeof originalUnsubscribe === 'function') {
+      subscription.unsubscribe = function(...unsubscribeArgs: any[]) {
+        activeSubscriptions.delete(subscription);
+        return originalUnsubscribe.apply(this, unsubscribeArgs);
+      };
+    }
+    return subscription;
+  };
+  observablePatch = { prototype, originalSubscribe };
+
+  let tornDown = false;
+  return () => {
+    if (tornDown) return;
+    tornDown = true;
+    if (observablePatch?.prototype === prototype) {
+      prototype.subscribe = originalSubscribe;
+      observablePatch = null;
+    }
+  };
+}
+
+export function getActiveSubscriptions(): Array<{ stack: string; timestamp: number }> {
+  return Array.from(activeSubscriptions.values());
+}
+
+export function clearActiveSubscriptions(): void {
+  activeSubscriptions.clear();
+}
+
+interface ComponentPatch {
+  prototype: any;
+  originalGet: (...args: any[]) => any;
+  destroyHooks: Map<any, any>;
+}
+
+let componentPatch: ComponentPatch | null = null;
+
+function teardownComponentPatch(): void {
+  if (!componentPatch) return;
+  componentPatch.prototype.get = componentPatch.originalGet;
+  for (const [definition, originalOnDestroy] of componentPatch.destroyHooks) {
+    definition.onDestroy = originalOnDestroy;
   }
+  componentPatch = null;
+}
 
+export function setupRxjsComponentTracking(angularCore: any): () => void {
   const core = angularCore || (globalThis as any).ngCore;
-  if (!core || injectorPatched) return;
-  const InjectorClass = core.Injector;
-  if (!InjectorClass || !InjectorClass.prototype) return;
+  const prototype = core?.Injector?.prototype;
+  if (!prototype || typeof prototype.get !== 'function') return () => undefined;
+  teardownComponentPatch();
 
-  const originalGet = InjectorClass.prototype.get;
-  injectorPatched = true;
+  const originalGet = prototype.get;
+  const destroyHooks = new Map<any, any>();
+  prototype.get = function(...args: any[]) {
+    const instance = originalGet.apply(this, args);
+    if (!instance || typeof instance !== 'object') return instance;
+    const constructor = instance.constructor;
+    const className = constructor?.name;
+    if (!className?.endsWith('Component') || activeComponents.has(instance)) return instance;
 
-  InjectorClass.prototype.get = function(token: any, notFoundValue?: any, flags?: any) {
-    const instance = originalGet.apply(this, arguments);
-    if (instance && typeof instance === 'object') {
-      const constructor = instance.constructor;
-      const className = constructor.name;
-      if (className && className.endsWith('Component') && !activeComponents.has(instance)) {
-        activeComponents.add(instance);
-        activeComponentCounts.set(constructor, (activeComponentCounts.get(constructor) || 0) + 1);
+    activeComponents.add(instance);
+    activeComponentCounts.set(constructor, (activeComponentCounts.get(constructor) || 0) + 1);
+    const definition = constructor.ɵcmp;
+    if (!definition || destroyHooks.has(definition)) return instance;
 
-        // Patch onDestroy via Ivy cmp definition
-        const cmpDef = constructor.ɵcmp;
-        if (cmpDef) {
-          const originalOnDestroy = cmpDef.onDestroy;
-          cmpDef.onDestroy = function(ctx: any) {
-            if (activeComponents.has(ctx)) {
-              activeComponents.delete(ctx);
-              const count = activeComponentCounts.get(constructor) || 0;
-              if (count > 1) {
-                activeComponentCounts.set(constructor, count - 1);
-              } else {
-                activeComponentCounts.delete(constructor);
-              }
-            }
-            
-            // Check if there are any remaining active instances of this component type
-            const hasRemainingInstances = activeComponentCounts.has(constructor);
-            if (!hasRemainingInstances) {
-              // No instances left! Check for leaked subscriptions of this class
-              const activeSubs = getActiveSubscriptions();
-              const leakedSubs = activeSubs.filter(sub => {
-                return sub.stack.includes(className);
-              });
+    const originalOnDestroy = definition.onDestroy;
+    destroyHooks.set(definition, originalOnDestroy);
+    definition.onDestroy = function(ctx: any) {
+      if (activeComponents.delete(ctx)) {
+        const count = activeComponentCounts.get(constructor) || 0;
+        if (count > 1) activeComponentCounts.set(constructor, count - 1);
+        else activeComponentCounts.delete(constructor);
+      }
 
-              if (leakedSubs.length > 0) {
-                const msg = `Component "${className}" was destroyed, but ${leakedSubs.length} active subscription(s) remain open!\n` +
-                  `Stack trace(s) of creation:\n` +
-                  leakedSubs.map(s => s.stack.split('\n').slice(0, 5).join('\n')).join('\n---\n');
-                console.warn(`⚠️ [AAET RxJS Leak Warning] ${msg}`);
-                
-                if (isAiGuardEnabled()) {
-                  analyzeViolationWithAi({
-                    ruleId: 'RXJS_SUBSCRIPTION_LEAK',
-                    message: msg,
-                    className
-                  });
-                }
-              }
-            }
-
-            if (originalOnDestroy) {
-              originalOnDestroy.call(this, ctx);
-            }
-          };
+      if (!activeComponentCounts.has(constructor)) {
+        const leakedSubscriptions = getActiveSubscriptions().filter(subscription => subscription.stack.includes(className));
+        if (leakedSubscriptions.length) {
+          const message = `Component "${className}" was destroyed, but ${leakedSubscriptions.length} active subscription(s) remain open!\n` +
+            `Stack trace(s) of creation:\n${leakedSubscriptions.map(item => item.stack.split('\n').slice(0, 5).join('\n')).join('\n---\n')}`;
+          console.warn(`⚠️ [AAET RxJS Leak Warning] ${message}`);
+          if (isAiGuardEnabled()) {
+            void analyzeViolationWithAi({ ruleId: 'RXJS_SUBSCRIPTION_LEAK', message, className });
+          }
         }
       }
-    }
+      if (originalOnDestroy) return originalOnDestroy.call(this, ctx);
+    };
     return instance;
+  };
+
+  componentPatch = { prototype, originalGet, destroyHooks };
+  let tornDown = false;
+  return () => {
+    if (tornDown) return;
+    tornDown = true;
+    if (componentPatch?.prototype === prototype) teardownComponentPatch();
   };
 }
 
@@ -159,7 +142,7 @@ export function getActiveComponentsCount(): number {
   return activeComponents.size;
 }
 
-export function clearActiveComponents() {
+export function clearActiveComponents(): void {
   activeComponents.clear();
   activeComponentCounts.clear();
 }

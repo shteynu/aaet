@@ -1,93 +1,70 @@
-// Dynamic DI Interceptor for dev mode boundary enforcement
 import { analyzeViolationWithAi, isAiGuardEnabled } from './ai-guard';
-import { globalRuntimeConfig } from './config-state';
 
 export interface RuntimeLayerConfig {
-  layers: { [key: string]: string };
-  layerRestrictions: Array<{
-    from: string;
-    cannotDependOn: string[];
-  }>;
+  layers: Record<string, string>;
+  layerRestrictions: Array<{ from: string; cannotDependOn: string[] }>;
 }
 
-let diGuardEnabled = false;
+interface DiPatch {
+  prototype: any;
+  originalGet: (...args: any[]) => any;
+}
 
-export function resetDiGuard() {
-  diGuardEnabled = false;
+let activePatch: DiPatch | null = null;
+
+export function resetDiGuard(): void {
+  if (activePatch) activePatch.prototype.get = activePatch.originalGet;
+  activePatch = null;
 }
 
 /**
- * Monkey-patches Angular's Injector to dynamically trace DI dependency resolutions
- * and intercept boundary violations in the browser console during development.
+ * Installs the experimental DI trace guard and returns an idempotent teardown.
  */
-export function setupDiGuard(
-  config: RuntimeLayerConfig,
-  angularCore: any // Pass @angular/core reference or Injector prototype dynamically to avoid peerDependency compile blocks in tests
-) {
-  if (globalRuntimeConfig && globalRuntimeConfig.checkers?.runtime) {
-    if (globalRuntimeConfig.checkers.runtime.enabled === false ||
-        globalRuntimeConfig.checkers.runtime.rules?.['STRICT_LAYERING'] === false) {
-      return;
-    }
-  }
-  // If no Angular core reference, check window.ng or global scope
+export function setupDiGuard(config: RuntimeLayerConfig, angularCore: any): () => void {
   const core = angularCore || (globalThis as any).ngCore;
-  if (!core) {
-    // Silent fail if Angular core is not present (e.g., outside browser/Angular context)
-    return;
-  }
-
-  const isDevModeFn = core.isDevMode;
-  if (isDevModeFn && !isDevModeFn()) {
-    return;
-  }
-
-  if (diGuardEnabled) return;
-  diGuardEnabled = true;
-
-  console.warn('⚠️ [AAET] Runtime DI Guard is active. Enforcing boundary validations.');
-
+  if (!core || (core.isDevMode && !core.isDevMode())) return () => undefined;
   const InjectorClass = core.Injector;
-  if (!InjectorClass || !InjectorClass.prototype) {
-    return;
-  }
+  const prototype = InjectorClass?.prototype;
+  if (!prototype || typeof prototype.get !== 'function') return () => undefined;
 
-  const originalGet = InjectorClass.prototype.get;
+  if (activePatch?.prototype === prototype) {
+    return () => resetDiGuard();
+  }
+  resetDiGuard();
+  const originalGet = prototype.get;
   const resolutionStack: string[] = [];
 
-  InjectorClass.prototype.get = function(token: any, notFoundValue?: any, flags?: any) {
-    const tokenName = typeof token === 'function' ? token.name : String(token);
-    
+  prototype.get = function(token: any, notFoundValue?: any, flags?: any) {
+    const tokenName = typeof token === 'function' ? token.name : String(token?.name ?? token);
     resolutionStack.push(tokenName);
-
     try {
       if (resolutionStack.length >= 2) {
         const dependent = resolutionStack[resolutionStack.length - 2];
         const dependency = resolutionStack[resolutionStack.length - 1];
-
         const dependentLower = dependent.toLowerCase();
         const dependencyLower = dependency.toLowerCase();
-
-        // Check if a component directly injects an API service
-        if (dependentLower.endsWith('component') && (dependencyLower.includes('api') && dependencyLower.includes('service'))) {
-          const msg = `Dynamic DI boundary violation detected!\n` +
+        if (dependentLower.endsWith('component') && dependencyLower.includes('api') && dependencyLower.includes('service')) {
+          const message = `Dynamic DI boundary violation detected!\n` +
             `Class "${dependent}" directly injected "${dependency}".\n` +
-            `Boundary rule: UI Components must not inject API Services directly. Use a Facade instead.`;
-          console.error(`❌ [AAET DI Violation] ${msg}`);
-          
+            'Boundary rule: UI Components must not inject API Services directly. Use a Facade instead.';
+          console.error(`❌ [AAET DI Violation] ${message}`);
           if (isAiGuardEnabled()) {
-            analyzeViolationWithAi({
-              ruleId: 'STRICT_LAYERING',
-              message: msg,
-              className: dependent
-            });
+            void analyzeViolationWithAi({ ruleId: 'STRICT_LAYERING', message, className: dependent });
           }
         }
       }
-
       return originalGet.apply(this, [token, notFoundValue, flags]);
     } finally {
       resolutionStack.pop();
     }
+  };
+
+  activePatch = { prototype, originalGet };
+  console.warn('⚠️ [AAET] Experimental runtime DI Guard is active.');
+  let tornDown = false;
+  return () => {
+    if (tornDown) return;
+    tornDown = true;
+    if (activePatch?.prototype === prototype) resetDiGuard();
   };
 }

@@ -179,7 +179,7 @@ export class ParadigmRule implements Rule {
       const text = node.text;
       if (text === 'window' || text === 'document' || text === 'localStorage' || text === 'sessionStorage') {
         let p = node.parent;
-        let isPropertyAccessName = p && ts.isPropertyAccessExpression(p) && p.name === node;
+        const isPropertyAccessName = p && ts.isPropertyAccessExpression(p) && p.name === node;
         let isImportOrType = false;
         while (p) {
           if (ts.isImportDeclaration(p) || ts.isImportSpecifier(p) || ts.isTypeReferenceNode(p) || ts.isParameter(p)) {

@@ -7,8 +7,7 @@ export class AiReadinessRule implements Rule {
     const { sourceFile, filePath, configManager } = context;
 
     // 1. One-Shot Context: Flag files exceeding max lines
-    const limits = configManager.getConfig().limits;
-    const maxLines = limits ? limits.maxLines : 400;
+    const maxLines = configManager.getConfig().checkers.static.settings.maxLines;
     const lineCount = sourceFile.getLineStarts().length;
     if (lineCount > maxLines) {
       violations.push({

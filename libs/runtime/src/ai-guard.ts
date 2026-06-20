@@ -1,4 +1,16 @@
-let aiGuardConfig: any = null;
+export interface RuntimeAiGuardConfig {
+  enabled: boolean;
+  provider?: 'openai' | 'anthropic';
+  endpointUrl?: string;
+  apiKeyEnv?: string;
+  apiKey?: string;
+  customRules?: string;
+  workspaceType?: 'nx' | 'standalone';
+  angularVersion?: number;
+  autoAnalyze?: boolean;
+}
+
+let aiGuardConfig: RuntimeAiGuardConfig | null = null;
 let workspaceTypeContext: string = 'standalone';
 let angularVersionContext: number = 19;
 
@@ -85,8 +97,19 @@ if (typeof globalThis !== 'undefined') {
   };
 }
 
-export function setupAiGuard(config: any, angularCore?: any) {
+export function resetAiGuard(): void {
+  aiGuardConfig = null;
+  pendingViolations.clear();
+  recentlyAnalyzedViolations.clear();
+  for (const pending of requestQueue.splice(0, requestQueue.length)) {
+    pending.resolve(null);
+  }
+  violationCounter = 0;
+}
+
+export function setupAiGuard(config: RuntimeAiGuardConfig): void {
   if (!config || !config.enabled) {
+    resetAiGuard();
     return;
   }
   aiGuardConfig = config;
@@ -109,6 +132,7 @@ async function executeAiAnalysis(violation: {
   className: string;
   filePath?: string;
 }) {
+  if (!aiGuardConfig) return null;
   const payload = {
     ruleId: violation.ruleId,
     violationMessage: violation.message,
@@ -213,11 +237,12 @@ export async function analyzeViolationWithAi(violation: {
   className: string;
   filePath?: string;
 }) {
-  if (!isAiGuardEnabled()) return;
+  const config = aiGuardConfig;
+  if (!config?.enabled) return;
 
   let autoAnalyze = true;
-  if (aiGuardConfig.autoAnalyze !== undefined) {
-    autoAnalyze = aiGuardConfig.autoAnalyze;
+  if (config.autoAnalyze !== undefined) {
+    autoAnalyze = config.autoAnalyze;
   } else {
     const isTestEnv = typeof process !== 'undefined' && (process.env.NODE_ENV === 'test' || process.env.VITEST === 'true') || !!(globalThis as any).vitest;
     autoAnalyze = isTestEnv;

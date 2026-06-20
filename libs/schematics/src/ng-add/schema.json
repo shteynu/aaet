@@ -1,8 +1,68 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema",
   "$id": "AaetNgAddSchema",
-  "title": "AAET Ng Add Options Schema",
+  "title": "AAET Setup",
   "type": "object",
-  "properties": {},
+  "properties": {
+    "interactive": {
+      "type": "boolean",
+      "default": true,
+      "description": "Allow Angular CLI schema prompts."
+    },
+    "preset": {
+      "type": "string",
+      "enum": ["recommended", "strict"],
+      "default": "recommended",
+      "x-prompt": {
+        "message": "Choose an AAET rule preset",
+        "type": "list",
+        "items": [
+          { "value": "recommended", "label": "Recommended — low-noise defaults" },
+          { "value": "strict", "label": "Strict — all static policies" }
+        ]
+      }
+    },
+    "checkers": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["static", "runtime", "ai"] },
+      "default": ["static"],
+      "uniqueItems": true,
+      "x-prompt": {
+        "message": "Choose AAET checkers",
+        "type": "list",
+        "multiselect": true,
+        "items": [
+          { "value": "static", "label": "Static analysis" },
+          { "value": "runtime", "label": "Runtime guards (experimental)" },
+          { "value": "ai", "label": "AI assistance" }
+        ]
+      }
+    },
+    "enableRule": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Rule IDs to enable. Repeat --enable-rule for multiple values."
+    },
+    "disableRule": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Rule IDs to disable. Repeat --disable-rule for multiple values."
+    },
+    "yes": {
+      "type": "boolean",
+      "default": false,
+      "description": "Apply updates to an existing configuration without confirmation."
+    },
+    "confirm": {
+      "type": "boolean",
+      "default": false,
+      "description": "Confirm an existing-file update after reviewing the logged preview. Prefer `aaet configure` for interactive confirmation."
+    },
+    "skipInstall": {
+      "type": "boolean",
+      "default": false,
+      "description": "Skip the package manager install task."
+    }
+  },
   "additionalProperties": false
 }

@@ -12,7 +12,10 @@
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
     "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
+    "types": ["node"],
     "paths": {
+      "@aaet/config": ["libs/config/src/index.ts"],
       "@aaet/core": ["libs/core/src/index.ts"],
       "@aaet/runtime": ["libs/runtime/src/index.ts"]
     }

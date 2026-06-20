@@ -12,6 +12,11 @@ export interface AiCheckPayload {
   fullFileFix?: boolean;
 }
 
+export interface AiCheckServerOptions {
+  workspaceRoot?: string;
+  maxFileBytes?: number;
+}
+
 /**
  * Node-compatible helper to securely run AI architectural analysis.
  * Can be wrapped inside an Express/Vite dev-server middleware.
@@ -19,7 +24,8 @@ export interface AiCheckPayload {
 export async function handleAiCheckRequest(
   payload: AiCheckPayload,
   apiKeyOverride?: string,
-  providerOverride?: 'anthropic' | 'openai'
+  providerOverride?: 'anthropic' | 'openai',
+  options: AiCheckServerOptions = {}
 ): Promise<{ explanation: string; suggestion: string }> {
   const provider = providerOverride || (process.env.AAET_AI_PROVIDER as 'anthropic' | 'openai') || 'anthropic';
   const apiKey = apiKeyOverride || 
@@ -31,8 +37,17 @@ export async function handleAiCheckRequest(
 
   let fileContent = '';
   if (payload.filePath) {
-    const fullPath = path.resolve(process.cwd(), payload.filePath);
+    const workspaceRoot = path.resolve(options.workspaceRoot ?? process.cwd());
+    const fullPath = path.resolve(workspaceRoot, payload.filePath);
+    const relativePath = path.relative(workspaceRoot, fullPath);
+    if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+      throw new Error('AI check filePath must remain inside the configured workspace root.');
+    }
     if (fs.existsSync(fullPath)) {
+      const maxFileBytes = options.maxFileBytes ?? 512_000;
+      if (fs.statSync(fullPath).size > maxFileBytes) {
+        throw new Error(`AI check source exceeds the ${maxFileBytes}-byte limit.`);
+      }
       fileContent = fs.readFileSync(fullPath, 'utf8');
     }
   }
@@ -121,7 +136,7 @@ ${fileContent ? `File Content:\n\`\`\`typescript\n${fileContent}\n\`\`\`` : ''}
       explanation: parsed.explanation || 'An architectural issue was detected.',
       suggestion: parsed.suggestion || ''
     };
-  } catch (err) {
+  } catch {
     return {
       explanation: resultText,
       suggestion: ''

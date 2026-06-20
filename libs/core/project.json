@@ -3,11 +3,37 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "projectType": "library",
   "sourceRoot": "libs/core/src",
+  "tags": ["scope:core", "type:library"],
+  "implicitDependencies": ["config"],
   "targets": {
     "analyze": {
       "executor": "nx:run-commands",
       "options": {
         "command": "npx tsx libs/core/src/index.ts"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": { "command": "npx tsc -p libs/core/tsconfig.lib.json --noEmit" }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "npx vitest run libs/core/src/cli.spec.ts",
+          "npx vitest run apps/demo-app/src/aaet.spec.ts --testNamePattern=\"AAET Static Analysis Engine\""
+        ],
+        "parallel": false
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "commands": [
+          "node -e \"require('fs').rmSync('dist/libs/core',{recursive:true,force:true})\"",
+          "npx tsup libs/core/src/index.ts libs/core/src/cli.ts --format cjs,esm --dts --out-dir dist/libs/core"
+        ],
+        "parallel": false
       }
     }
   }

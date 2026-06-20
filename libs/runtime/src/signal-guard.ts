@@ -1,121 +1,124 @@
 import { analyzeViolationWithAi, isAiGuardEnabled } from './ai-guard';
-import { globalRuntimeConfig } from './config-state';
 
 let computedNestingLevel = 0;
 
-export function getComputedNestingLevel() {
+export function getComputedNestingLevel(): number {
   return computedNestingLevel;
+}
+
+function reportSignalMutation(): void {
+  const message = 'Writable signal mutation detected inside a computed context!\n' +
+    'Do not mutate signals inside computed() because it introduces side effects and cyclical updates.';
+  console.error(`❌ [AAET Signal Violation] ${message}`);
+  if (!isAiGuardEnabled()) return;
+  const stack = new Error().stack || '';
+  const match = stack.match(/at new\s+([A-Z][a-zA-Z0-9_]+Component|[A-Z][a-zA-Z0-9_]+Service)/) ||
+    stack.match(/at\s+([A-Z][a-zA-Z0-9_]+Component|[A-Z][a-zA-Z0-9_]+Service)/);
+  void analyzeViolationWithAi({
+    ruleId: 'MUTABLE_SIGNAL_IN_COMPUTED',
+    message,
+    className: match ? match[1] : 'UnknownClass'
+  });
 }
 
 export function wrapComputed(originalComputed: any) {
   return function(computation: any, options: any) {
-    const wrappedComputation = function() {
+    return originalComputed(function() {
       computedNestingLevel++;
       try {
         return computation();
       } finally {
         computedNestingLevel--;
       }
-    };
-    return originalComputed(wrappedComputation, options);
+    }, options);
   };
 }
 
 export function wrapSignal(originalSignal: any) {
   return function(initialValue: any, options: any) {
-    const s = originalSignal(initialValue, options);
-
-    const originalSet = s.set;
-    if (originalSet) {
-      s.set = function(value: any) {
-        if (computedNestingLevel > 0) {
-          const msg = `Writable signal mutation detected inside a computed context!\n` +
-            `Do not mutate signals inside computed() as it causes side-effects and cyclical updates.`;
-          console.error(`❌ [AAET Signal Violation] ${msg}`);
-          
-          if (isAiGuardEnabled()) {
-            const err = new Error();
-            const stack = err.stack || '';
-            const match = stack.match(/at new\s+([A-Z][a-zA-Z0-9_]+Component|[A-Z][a-zA-Z0-9_]+Service)/) || 
-                          stack.match(/at\s+([A-Z][a-zA-Z0-9_]+Component|[A-Z][a-zA-Z0-9_]+Service)/);
-            const className = match ? match[1] : 'UnknownClass';
-            analyzeViolationWithAi({
-              ruleId: 'MUTABLE_SIGNAL_IN_COMPUTED',
-              message: msg,
-              className
-            });
-          }
-        }
-        return originalSet.apply(this, arguments);
+    const signal = originalSignal(initialValue, options);
+    const originalSet = signal.set;
+    if (typeof originalSet === 'function') {
+      signal.set = function(...args: any[]) {
+        if (computedNestingLevel > 0) reportSignalMutation();
+        return originalSet.apply(this, args);
       };
     }
-
-    const originalUpdate = s.update;
-    if (originalUpdate) {
-      s.update = function(updateFn: any) {
-        if (computedNestingLevel > 0) {
-          const msg = `Writable signal mutation detected inside a computed context!\n` +
-            `Do not mutate signals inside computed() as it causes side-effects and cyclical updates.`;
-          console.error(`❌ [AAET Signal Violation] ${msg}`);
-          
-          if (isAiGuardEnabled()) {
-            const err = new Error();
-            const stack = err.stack || '';
-            const match = stack.match(/at new\s+([A-Z][a-zA-Z0-9_]+Component|[A-Z][a-zA-Z0-9_]+Service)/) || 
-                          stack.match(/at\s+([A-Z][a-zA-Z0-9_]+Component|[A-Z][a-zA-Z0-9_]+Service)/);
-            const className = match ? match[1] : 'UnknownClass';
-            analyzeViolationWithAi({
-              ruleId: 'MUTABLE_SIGNAL_IN_COMPUTED',
-              message: msg,
-              className
-            });
-          }
-        }
-        return originalUpdate.apply(this, arguments);
+    const originalUpdate = signal.update;
+    if (typeof originalUpdate === 'function') {
+      signal.update = function(...args: any[]) {
+        if (computedNestingLevel > 0) reportSignalMutation();
+        return originalUpdate.apply(this, args);
       };
     }
-
-    return s;
+    return signal;
   };
 }
 
-/**
- * Monkey-patches Angular's signal and computed functions to intercept writable signal
- * mutations inside computed contexts.
- */
-export function setupSignalGuard(angularCore: any) {
-  if (globalRuntimeConfig && globalRuntimeConfig.checkers?.runtime) {
-    if (globalRuntimeConfig.checkers.runtime.enabled === false ||
-        globalRuntimeConfig.checkers.runtime.rules?.['MUTABLE_SIGNAL_IN_COMPUTED'] === false) {
-      return;
-    }
-  }
+interface SignalPatch {
+  angularCore: any;
+  signalDescriptor?: PropertyDescriptor;
+  computedDescriptor?: PropertyDescriptor;
+  installedSignal: boolean;
+  installedComputed: boolean;
+}
 
-  if (!angularCore) return;
+let activePatch: SignalPatch | null = null;
+
+function restoreSignalPatch(): void {
+  if (!activePatch) return;
+  if (activePatch.installedSignal) {
+    if (activePatch.signalDescriptor) Object.defineProperty(activePatch.angularCore, 'signal', activePatch.signalDescriptor);
+    else delete activePatch.angularCore.signal;
+  }
+  if (activePatch.installedComputed) {
+    if (activePatch.computedDescriptor) Object.defineProperty(activePatch.angularCore, 'computed', activePatch.computedDescriptor);
+    else delete activePatch.angularCore.computed;
+  }
+  activePatch = null;
+  computedNestingLevel = 0;
+}
+
+export function setupSignalGuard(angularCore: any): () => void {
+  if (!angularCore) return () => undefined;
+  restoreSignalPatch();
+  const signalDescriptor = Object.getOwnPropertyDescriptor(angularCore, 'signal');
+  const computedDescriptor = Object.getOwnPropertyDescriptor(angularCore, 'computed');
+  let installedSignal = false;
+  let installedComputed = false;
 
   try {
-    const originalSignal = angularCore.signal;
-    if (originalSignal) {
+    if (typeof angularCore.signal === 'function') {
       Object.defineProperty(angularCore, 'signal', {
-        value: wrapSignal(originalSignal),
-        writable: true,
-        configurable: true
+        value: wrapSignal(angularCore.signal), writable: true, configurable: true
       });
+      installedSignal = true;
     }
-  } catch (err) {
-    // Silent fail if immutable
+  } catch {
+    // Angular ESM namespace objects can be immutable; this guard remains experimental.
+  }
+  try {
+    if (typeof angularCore.computed === 'function') {
+      Object.defineProperty(angularCore, 'computed', {
+        value: wrapComputed(angularCore.computed), writable: true, configurable: true
+      });
+      installedComputed = true;
+    }
+  } catch {
+    // Angular ESM namespace objects can be immutable; this guard remains experimental.
   }
 
-  try {
-    const originalComputed = angularCore.computed;
-    if (originalComputed) {
-      Object.defineProperty(angularCore, 'computed', {
-        value: wrapComputed(originalComputed),
-        writable: true,
-        configurable: true
-      });
-    }
-  } catch (err) {
-    // Silent fail if immutable
-  }
+  activePatch = {
+    angularCore,
+    signalDescriptor: installedSignal ? signalDescriptor : undefined,
+    computedDescriptor: installedComputed ? computedDescriptor : undefined,
+    installedSignal,
+    installedComputed
+  };
+  let tornDown = false;
+  return () => {
+    if (tornDown) return;
+    tornDown = true;
+    if (activePatch?.angularCore === angularCore) restoreSignalPatch();
+  };
 }
