@@ -31,6 +31,11 @@ export class ConfigManager {
   private angularVersion: number = 19; // Default to v19
   private workspaceType: 'nx' | 'standalone' = 'standalone';
 
+  // Performance Optimization Caches
+  private fileLayersCache = new Map<string, string[]>();
+  private violationCache = new Map<string, { violates: boolean; fromLayer?: string; forbiddenLayer?: string }>();
+  private templateCache = new Map<string, string>();
+
   constructor(projectRoot: string = process.cwd()) {
     this.projectRoot = projectRoot;
     const configPath = path.resolve(projectRoot, 'aaet.config.json');
@@ -104,6 +109,9 @@ export class ConfigManager {
   }
 
   getFileLayers(filePath: string): string[] {
+    if (this.fileLayersCache.has(filePath)) {
+      return this.fileLayersCache.get(filePath)!;
+    }
     const relativePath = path.relative(this.projectRoot, filePath);
     const layers: string[] = [];
     for (const [layerName, globPattern] of Object.entries(this.config.layers)) {
@@ -111,24 +119,56 @@ export class ConfigManager {
         layers.push(layerName);
       }
     }
+    this.fileLayersCache.set(filePath, layers);
     return layers;
   }
 
   checkViolation(sourceFile: string, importedFile: string): { violates: boolean; fromLayer?: string; forbiddenLayer?: string } {
+    const cacheKey = `${sourceFile} -> ${importedFile}`;
+    if (this.violationCache.has(cacheKey)) {
+      return this.violationCache.get(cacheKey)!;
+    }
+
     const sourceLayers = this.getFileLayers(sourceFile);
     const importedLayers = this.getFileLayers(importedFile);
+
+    let result: { violates: boolean; fromLayer?: string; forbiddenLayer?: string } = { violates: false };
 
     for (const fromLayer of sourceLayers) {
       const restriction = this.config.layerRestrictions.find(r => r.from === fromLayer);
       if (restriction) {
         for (const forbiddenLayer of restriction.cannotDependOn) {
           if (importedLayers.includes(forbiddenLayer)) {
-            return { violates: true, fromLayer, forbiddenLayer };
+            result = { violates: true, fromLayer, forbiddenLayer };
+            break;
           }
         }
       }
+      if (result.violates) break;
     }
 
-    return { violates: false };
+    this.violationCache.set(cacheKey, result);
+    return result;
+  }
+
+  readTemplateFile(templatePath: string): string {
+    if (this.templateCache.has(templatePath)) {
+      return this.templateCache.get(templatePath)!;
+    }
+    const content = fs.readFileSync(templatePath, 'utf8');
+    this.templateCache.set(templatePath, content);
+    return content;
+  }
+
+  invalidateFile(filePath: string): void {
+    this.fileLayersCache.delete(filePath);
+    this.templateCache.delete(filePath);
+    
+    // Invalidate violation cache entries for this file
+    for (const key of this.violationCache.keys()) {
+      if (key.includes(filePath)) {
+        this.violationCache.delete(key);
+      }
+    }
   }
 }

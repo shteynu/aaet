@@ -13,6 +13,7 @@ export interface RuleContext {
   sourceFile: ts.SourceFile;
   filePath: string;
   configManager: ConfigManager;
+  getNodes<T extends ts.Node>(kind: ts.SyntaxKind): T[];
 }
 
 export interface Rule {

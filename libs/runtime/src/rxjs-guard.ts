@@ -2,13 +2,21 @@ import { analyzeViolationWithAi, isAiGuardEnabled } from './ai-guard';
 
 export const activeSubscriptions = new Map<any, { stack: string; timestamp: number }>();
 
+let rxjsStackDepth = 10;
+let rxjsSamplingRate = 1.0;
+
 /**
  * Monkey-patches RxJS Observable.prototype.subscribe to track active subscriptions
  * and detect leaks (subscriptions that are never unsubscribed).
  */
-export function setupRxjsGuard(ObservableClass: any) {
+export function setupRxjsGuard(ObservableClass: any, config?: { stackDepth?: number; samplingRate?: number }) {
   if (!ObservableClass || !ObservableClass.prototype) {
     return;
+  }
+
+  if (config) {
+    if (config.stackDepth !== undefined) rxjsStackDepth = config.stackDepth;
+    if (config.samplingRate !== undefined) rxjsSamplingRate = config.samplingRate;
   }
 
   const originalSubscribe = ObservableClass.prototype.subscribe;
@@ -16,9 +24,17 @@ export function setupRxjsGuard(ObservableClass: any) {
   ObservableClass.prototype.subscribe = function(...args: any[]) {
     const subscription = originalSubscribe.apply(this, args);
 
-    // Capture stack trace to pinpoint the subscription site
+    // Apply sampling rate check
+    if (rxjsSamplingRate < 1.0 && Math.random() > rxjsSamplingRate) {
+      return subscription;
+    }
+
+    // Capture stack trace to pinpoint the subscription site with a V8 depth limit
+    const originalLimit = Error.stackTraceLimit;
+    Error.stackTraceLimit = rxjsStackDepth;
     const err = new Error();
     const stack = err.stack || '';
+    Error.stackTraceLimit = originalLimit;
 
     // Register active subscription
     activeSubscriptions.set(subscription, {
@@ -48,6 +64,7 @@ export function clearActiveSubscriptions() {
 
 let injectorPatched = false;
 export const activeComponents = new Set<any>();
+export const activeComponentCounts = new Map<any, number>();
 
 /**
  * Intercepts component resolutions via Injector to track component instances.
@@ -70,16 +87,25 @@ export function setupRxjsComponentTracking(angularCore: any) {
       const className = constructor.name;
       if (className && className.endsWith('Component') && !activeComponents.has(instance)) {
         activeComponents.add(instance);
+        activeComponentCounts.set(constructor, (activeComponentCounts.get(constructor) || 0) + 1);
 
         // Patch onDestroy via Ivy cmp definition
         const cmpDef = constructor.ɵcmp;
         if (cmpDef) {
           const originalOnDestroy = cmpDef.onDestroy;
           cmpDef.onDestroy = function(ctx: any) {
-            activeComponents.delete(ctx);
+            if (activeComponents.has(ctx)) {
+              activeComponents.delete(ctx);
+              const count = activeComponentCounts.get(constructor) || 0;
+              if (count > 1) {
+                activeComponentCounts.set(constructor, count - 1);
+              } else {
+                activeComponentCounts.delete(constructor);
+              }
+            }
             
             // Check if there are any remaining active instances of this component type
-            const hasRemainingInstances = Array.from(activeComponents).some((c: any) => c.constructor === constructor);
+            const hasRemainingInstances = activeComponentCounts.has(constructor);
             if (!hasRemainingInstances) {
               // No instances left! Check for leaked subscriptions of this class
               const activeSubs = getActiveSubscriptions();
@@ -120,4 +146,5 @@ export function getActiveComponentsCount(): number {
 
 export function clearActiveComponents() {
   activeComponents.clear();
+  activeComponentCounts.clear();
 }

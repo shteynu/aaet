@@ -11,9 +11,30 @@ import { PatternsRule } from './rules/patterns.rule';
 
 export * from './ai-check.server';
 export * from './context/config-manager';
+export * from './plugins/vite-plugin';
+export * from './plugins/webpack-plugin';
+export * from './eslint/eslint-rule';
 
-export function runStaticAnalysis(projectRoot: string, filesToAnalyze?: string[]): Violation[] {
-  const configManager = new ConfigManager(projectRoot);
+let sharedConfigManager: ConfigManager | null = null;
+
+export function getOrCreateConfigManager(projectRoot: string): ConfigManager {
+  if (!sharedConfigManager) {
+    sharedConfigManager = new ConfigManager(projectRoot);
+  }
+  return sharedConfigManager;
+}
+
+export function invalidateFileCache(filePath: string) {
+  if (sharedConfigManager) {
+    sharedConfigManager.invalidateFile(filePath);
+  }
+}
+
+export function runStaticAnalysisForSourceFile(
+  sourceFile: ts.SourceFile,
+  filePath: string,
+  configManager: ConfigManager
+): Violation[] {
   const rules: Rule[] = [
     new LayeringRule(),
     new AiReadinessRule(),
@@ -21,6 +42,38 @@ export function runStaticAnalysis(projectRoot: string, filesToAnalyze?: string[]
     new PerformanceRule(),
     new PatternsRule()
   ];
+
+  const nodesByKind = new Map<ts.SyntaxKind, ts.Node[]>();
+  function visit(node: ts.Node) {
+    let list = nodesByKind.get(node.kind);
+    if (!list) {
+      list = [];
+      nodesByKind.set(node.kind, list);
+    }
+    list.push(node);
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+
+  const context: RuleContext = {
+    sourceFile,
+    filePath,
+    configManager,
+    getNodes<T extends ts.Node>(kind: ts.SyntaxKind): T[] {
+      return (nodesByKind.get(kind) || []) as T[];
+    }
+  };
+
+  const violations: Violation[] = [];
+  for (const rule of rules) {
+    const v = rule.run(context);
+    violations.push(...v);
+  }
+  return violations;
+}
+
+export function runStaticAnalysis(projectRoot: string, filesToAnalyze?: string[]): Violation[] {
+  const configManager = getOrCreateConfigManager(projectRoot);
 
   let files = filesToAnalyze;
   if (!files) {
@@ -41,16 +94,8 @@ export function runStaticAnalysis(projectRoot: string, filesToAnalyze?: string[]
       true
     );
 
-    const context: RuleContext = {
-      sourceFile,
-      filePath,
-      configManager
-    };
-
-    for (const rule of rules) {
-      const violations = rule.run(context);
-      allViolations.push(...violations);
-    }
+    const violations = runStaticAnalysisForSourceFile(sourceFile, filePath, configManager);
+    allViolations.push(...violations);
   }
 
   return allViolations;

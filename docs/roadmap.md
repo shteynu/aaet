@@ -51,6 +51,19 @@ This document details the development roadmap for the Angular Architectural Enfo
 * Implemented an AI Auto-Fix command (`npx nx fix demo-app`) to automatically apply LLM-generated refactorings for simple violations.
 * Created an AI Context Generator tool (`npx nx context demo-app`) that exports the workspace's architectural boundaries and rules into a `.ai-context.md` file, ready to be attached to LLM prompts.
 
+### ⏳ Phase 9: Performance Optimization & Reliability Hardening (Planned)
+* **Dev-Mode Runtime Overhead Mitigation:**
+  - Implement lazy, sampled, or depth-limited stack trace generation for the RxJS subscription leak detector to eliminate V8 CPU stalls.
+  - Optimize the active component tracking checks to use a constructor-to-count map lookup \(O(1)\) instead of converting the Set to an array and running `.some()` linear scans \(O(N)\) on every component destroy.
+  - Cache class/constructor name reflections in DI Guard to avoid repeated string conversions.
+* **AI API Request Flooding Guard:**
+  - Build a throttling/debouncing queue for runtime violations to prevent concurrent network requests to Claude/OpenAI when high-frequency issues occur.
+  - Introduce an opt-in mode where AI diagnostics are run on-demand (e.g. by clicking a console log button) rather than firing automatic requests.
+* **Static Analysis Speedups:**
+  - Replace synchronous template reading (`fs.readFileSync`) inside AST walks with a pre-read caching mechanism.
+  - Refactor static rules (`LayeringRule`, `PatternsRule`, `AiReadinessRule`) to share a single-pass AST visitor rather than doing multiple recursive traversals.
+  - Cache results of file layer glob resolution (`minimatch`) inside `ConfigManager` to optimize project-wide scanning.
+
 ---
 
 ## 🚀 Future Goals & Enhancement Pipeline

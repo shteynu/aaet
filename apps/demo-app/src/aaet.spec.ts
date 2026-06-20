@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs';
-import { runStaticAnalysis, handleAiCheckRequest } from '../../../libs/core/src/index';
+import * as ts from 'typescript';
+import { runStaticAnalysis, handleAiCheckRequest, getOrCreateConfigManager, AaetWebpackPlugin, aaetEslintRule } from '../../../libs/core/src/index';
 import { ConfigManager } from '../../../libs/core/src/context/config-manager';
-import { setupDiGuard, resetDiGuard, ProfileMethods, setupRxjsGuard, getActiveSubscriptions, clearActiveSubscriptions, setupSignalGuard, setupZoneGuard, setupAiGuard, AiVerify, setupChangeDetectionGuard, setupRxjsComponentTracking, getActiveComponentsCount, clearActiveComponents, activeSubscriptions } from '../../../libs/runtime/src/index';
+import { setupDiGuard, resetDiGuard, ProfileMethods, setupRxjsGuard, getActiveSubscriptions, clearActiveSubscriptions, setupSignalGuard, setupZoneGuard, setupAiGuard, AiVerify, setupChangeDetectionGuard, setupRxjsComponentTracking, getActiveComponentsCount, clearActiveComponents, activeSubscriptions, analyzeViolationWithAi } from '../../../libs/runtime/src/index';
 
 describe('AAET Static Analysis Engine', () => {
   const projectRoot = path.resolve(__dirname, '../../..');
@@ -316,6 +317,7 @@ describe('AAET Runtime Validator', () => {
 });
 
 describe('AAET AI Guard & Verification Engine', () => {
+  const projectRoot = path.resolve(__dirname, '../../..');
   it('should parse and detect aiGuard configurations in ConfigManager', () => {
     const configManager = new ConfigManager(path.resolve(__dirname, '../../..'));
     expect(configManager.getWorkspaceType()).toBe('nx');
@@ -547,6 +549,211 @@ describe('AAET AI Guard & Verification Engine', () => {
     consoleWarnSpy.mockRestore();
     clearActiveComponents();
     clearActiveSubscriptions();
+  });
+
+  it('should support manual opt-in AI analysis via global aaet.analyze() and log styled console messages', async () => {
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    
+    setupAiGuard({
+      enabled: true,
+      autoAnalyze: false,
+      endpointUrl: 'http://localhost:3000/api/aaet-ai-check'
+    });
+    
+    try {
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() => {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            explanation: 'On-demand explanation',
+            suggestion: 'On-demand suggestion'
+          })
+        } as any);
+      });
+
+      await analyzeViolationWithAi({
+        ruleId: 'MY_MANUAL_VIOLATION',
+        message: 'This is a test warning',
+        className: 'MyComponent'
+      });
+
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(consoleWarnSpy).toHaveBeenCalled();
+      expect(consoleLogSpy).toHaveBeenCalled();
+
+      const logCall = consoleLogSpy.mock.calls.find(call => call[0].includes('aaet.analyze'));
+      expect(logCall).toBeDefined();
+
+      const globalAaet = (globalThis as any).aaet;
+      expect(globalAaet).toBeDefined();
+      expect(typeof globalAaet.analyze).toBe('function');
+
+      const res = await globalAaet.analyze(1);
+      expect(fetchSpy).toHaveBeenCalled();
+      expect(res.explanation).toBe('On-demand explanation');
+
+      fetchSpy.mockRestore();
+    } finally {
+      consoleWarnSpy.mockRestore();
+      consoleLogSpy.mockRestore();
+    }
+  });
+
+  it('should support configurable stackDepth and samplingRate for RxJS Guard', () => {
+    class MockObservable {
+      subscribe(cb: any) {
+        return { unsubscribe: () => {} };
+      }
+    }
+
+    setupRxjsGuard(MockObservable, { samplingRate: 0 });
+
+    const obs = new MockObservable();
+    const sub = obs.subscribe(() => {});
+
+    expect(getActiveSubscriptions().length).toBe(0);
+
+    setupRxjsGuard(MockObservable, { samplingRate: 1, stackDepth: 3 });
+    const sub2 = obs.subscribe(() => {});
+    const active = getActiveSubscriptions();
+    expect(active.length).toBe(1);
+    
+    const lines = active[0].stack.split('\n');
+    expect(lines.length).toBeLessThanOrEqual(4); 
+
+    sub2.unsubscribe();
+    clearActiveSubscriptions();
+  });
+
+  it('should queue concurrent AI requests and deduplicate duplicate violation reports', async () => {
+    let activeFetches = 0;
+    let maxConcurrentFetches = 0;
+    let totalFetchCalls = 0;
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      activeFetches++;
+      maxConcurrentFetches = Math.max(maxConcurrentFetches, activeFetches);
+      await new Promise(resolve => setTimeout(resolve, 30));
+      activeFetches--;
+      totalFetchCalls++;
+      return {
+        ok: true,
+        json: () => Promise.resolve({ explanation: 'Resolved', suggestion: '' })
+      } as any;
+    });
+
+    setupAiGuard({
+      enabled: true,
+      autoAnalyze: true,
+      endpointUrl: 'http://localhost:3000/api/aaet-ai-check'
+    });
+
+    // Fire 3 calls concurrently (2 are duplicates, 1 is distinct)
+    const p1 = analyzeViolationWithAi({
+      ruleId: 'QUEUE_RULE',
+      message: 'Violation 1',
+      className: 'QueueComponent'
+    });
+
+    const p2 = analyzeViolationWithAi({
+      ruleId: 'QUEUE_RULE', // Duplicate of p1
+      message: 'Violation 2',
+      className: 'QueueComponent'
+    });
+
+    const p3 = analyzeViolationWithAi({
+      ruleId: 'QUEUE_RULE_DISTINCT', // Distinct violation
+      message: 'Violation 3',
+      className: 'DistinctComponent'
+    });
+
+    const results = await Promise.all([p1, p2, p3]);
+
+    // Max concurrent fetches must be 1 (serialized queue!)
+    expect(maxConcurrentFetches).toBe(1);
+    
+    // Total fetch calls should be 2 (p1 and p3. p2 was skipped as a duplicate!)
+    expect(totalFetchCalls).toBe(2);
+
+    expect(results[0]?.explanation).toBe('Resolved');
+    expect(results[1]?.explanation).toContain('Duplicate skipped');
+    expect(results[2]?.explanation).toBe('Resolved');
+
+    fetchSpy.mockRestore();
+  });
+
+  it('should support ConfigManager cache invalidation and dev-server plugin hooks', () => {
+    const configManager = getOrCreateConfigManager(projectRoot);
+    
+    // Invalidate file
+    configManager.invalidateFile('non-existent.ts');
+
+    const testFile = path.resolve(projectRoot, 'libs/core/src/index.ts');
+    const layers = configManager.getFileLayers(testFile);
+    expect(layers).toBeDefined();
+
+    configManager.invalidateFile(testFile);
+    
+    // Webpack watch-run invalidation callback check
+    const webpackPlugin = new AaetWebpackPlugin();
+    let callbackTriggered = false;
+    const mockCompiler = {
+      hooks: {
+        watchRun: {
+          tap: (name: string, callback: any) => {
+            const mockWatching = {
+              watchFileSystem: {
+                watcher: {
+                  mtimes: {
+                    [testFile]: Date.now()
+                  }
+                }
+              }
+            };
+            callback(mockWatching);
+            callbackTriggered = true;
+          }
+        }
+      }
+    };
+    webpackPlugin.apply(mockCompiler);
+    expect(callbackTriggered).toBe(true);
+  });
+
+  it('should run custom ESLint rule utilizing parserServices.program to report violations', () => {
+    const mockReport = vi.fn();
+    const testFile = path.resolve(projectRoot, 'apps/demo-app/src/stub-component.ts');
+    
+    const content = fs.readFileSync(testFile, 'utf8');
+    const sourceFile = ts.createSourceFile(
+      testFile,
+      content,
+      ts.ScriptTarget.Latest,
+      true
+    );
+
+    const mockProgram = {
+      getSourceFile: (filePath: string) => {
+        if (filePath === testFile) return sourceFile;
+        return null;
+      }
+    };
+
+    const mockContext = {
+      getFilename: () => testFile,
+      getCwd: () => projectRoot,
+      parserServices: {
+        program: mockProgram
+      },
+      report: mockReport
+    };
+
+    aaetEslintRule.create(mockContext);
+
+    expect(mockReport).toHaveBeenCalled();
+    const reports = mockReport.mock.calls.map(call => call[0].message);
+    expect(reports.some(msg => msg.includes('ENFORCE_STANDALONE') || msg.includes('ENFORCE_ONPUSH'))).toBe(true);
   });
 });
 

@@ -9,79 +9,81 @@ export class ParadigmRule implements Rule {
     const isUiLayer = layers.includes('ui');
     const angularVersion = configManager.getAngularVersion();
 
-    function checkNode(node: ts.Node) {
-      // 1. Block legacy decorators (@Input, @Output) & legacy query decorators (@ViewChild, etc.)
-      if (ts.isPropertyDeclaration(node)) {
-        if (node.modifiers) {
-          for (const modifier of node.modifiers) {
-            if (ts.isDecorator(modifier)) {
-              const decoratorText = modifier.expression.getText(sourceFile);
-              if ((decoratorText.startsWith('Input') || decoratorText.startsWith('Output')) && angularVersion >= 17) {
-                const { line, character } = getLineAndCharacter(sourceFile, modifier);
-                violations.push({
-                  ruleId: 'LEGACY_DECORATOR',
-                  message: `Modern Paradigm Violation: Legacy decorator "@${decoratorText}" is forbidden. Enforce modern Angular v17+ syntax (e.g. input() instead of @Input()).`,
-                  file: filePath,
-                  line,
-                  character
-                });
-              } else if (
-                (decoratorText.startsWith('ViewChild') ||
-                decoratorText.startsWith('ViewChildren') ||
-                decoratorText.startsWith('ContentChild') ||
-                decoratorText.startsWith('ContentChildren')) &&
-                angularVersion >= 17
-              ) {
-                const { line, character } = getLineAndCharacter(sourceFile, modifier);
-                violations.push({
-                  ruleId: 'MODERN_QUERY',
-                  message: `Modern Paradigm Violation: Legacy query decorator "@${decoratorText}" is forbidden. Enforce modern Signal-based queries (e.g. viewChild() instead of @ViewChild()).`,
-                  file: filePath,
-                  line,
-                  character
-                });
-              }
+    // 1. Block legacy decorators & legacy query decorators on Properties
+    const properties = context.getNodes<ts.PropertyDeclaration>(ts.SyntaxKind.PropertyDeclaration);
+    for (const node of properties) {
+      if (node.modifiers) {
+        for (const modifier of node.modifiers) {
+          if (ts.isDecorator(modifier)) {
+            const decoratorText = modifier.expression.getText(sourceFile);
+            if ((decoratorText.startsWith('Input') || decoratorText.startsWith('Output')) && angularVersion >= 17) {
+              const { line, character } = getLineAndCharacter(sourceFile, modifier);
+              violations.push({
+                ruleId: 'LEGACY_DECORATOR',
+                message: `Modern Paradigm Violation: Legacy decorator "@${decoratorText}" is forbidden. Enforce modern Angular v17+ syntax (e.g. input() instead of @Input()).`,
+                file: filePath,
+                line,
+                character
+              });
+            } else if (
+              (decoratorText.startsWith('ViewChild') ||
+              decoratorText.startsWith('ViewChildren') ||
+              decoratorText.startsWith('ContentChild') ||
+              decoratorText.startsWith('ContentChildren')) &&
+              angularVersion >= 17
+            ) {
+              const { line, character } = getLineAndCharacter(sourceFile, modifier);
+              violations.push({
+                ruleId: 'MODERN_QUERY',
+                message: `Modern Paradigm Violation: Legacy query decorator "@${decoratorText}" is forbidden. Enforce modern Signal-based queries (e.g. viewChild() instead of @ViewChild()).`,
+                file: filePath,
+                line,
+                character
+              });
             }
-          }
-        }
-
-        // 2. Forbid raw RxJS Subject/Observable in UI components (only for Angular 16+ where Signals exist)
-        if (isUiLayer && angularVersion >= 16) {
-          let hasRxjs = false;
-          let rxType = '';
-
-          if (node.type) {
-            const typeText = node.type.getText(sourceFile);
-            if (/\b(Subject|BehaviorSubject|Observable|ReplaySubject)\b/.test(typeText)) {
-              hasRxjs = true;
-              rxType = typeText;
-            }
-          }
-
-          if (node.initializer && !hasRxjs) {
-            const initText = node.initializer.getText(sourceFile);
-            if (/\bnew\s+(Subject|BehaviorSubject|Observable|ReplaySubject)\b/.test(initText)) {
-              hasRxjs = true;
-              rxType = initText;
-            }
-          }
-
-          if (hasRxjs) {
-            const propName = node.name.getText(sourceFile);
-            const { line, character } = getLineAndCharacter(sourceFile, node);
-            violations.push({
-              ruleId: 'FORBID_RAW_RXJS_UI',
-              message: `Modern Paradigm Violation: Raw RxJS property "${propName}" of type/initializer "${rxType}" is forbidden in UI components. Re-architect using Angular Signals (e.g., input(), computed(), signal(), or toSignal()) for modern performance and declarative templates.`,
-              file: filePath,
-              line,
-              character
-            });
           }
         }
       }
 
-      // 3. Enforce OnPush change detection strategy and Standalone components
-      if (ts.isClassDeclaration(node) && node.modifiers) {
+      // 2. Forbid raw RxJS Subject/Observable in UI components (only for Angular 16+ where Signals exist)
+      if (isUiLayer && angularVersion >= 16) {
+        let hasRxjs = false;
+        let rxType = '';
+
+        if (node.type) {
+          const typeText = node.type.getText(sourceFile);
+          if (/\b(Subject|BehaviorSubject|Observable|ReplaySubject)\b/.test(typeText)) {
+            hasRxjs = true;
+            rxType = typeText;
+          }
+        }
+
+        if (node.initializer && !hasRxjs) {
+          const initText = node.initializer.getText(sourceFile);
+          if (/\bnew\s+(Subject|BehaviorSubject|Observable|ReplaySubject)\b/.test(initText)) {
+            hasRxjs = true;
+            rxType = initText;
+          }
+        }
+
+        if (hasRxjs) {
+          const propName = node.name.getText(sourceFile);
+          const { line, character } = getLineAndCharacter(sourceFile, node);
+          violations.push({
+            ruleId: 'FORBID_RAW_RXJS_UI',
+            message: `Modern Paradigm Violation: Raw RxJS property "${propName}" of type/initializer "${rxType}" is forbidden in UI components. Re-architect using Angular Signals (e.g., input(), computed(), signal(), or toSignal()) for modern performance and declarative templates.`,
+            file: filePath,
+            line,
+            character
+          });
+        }
+      }
+    }
+
+    // 3. Enforce OnPush change detection strategy and Standalone components
+    const classes = context.getNodes<ts.ClassDeclaration>(ts.SyntaxKind.ClassDeclaration);
+    for (const node of classes) {
+      if (node.modifiers) {
         let isComponent = false;
         let hasOnPush = false;
         let isStandalone = false;
@@ -140,9 +142,12 @@ export class ParadigmRule implements Rule {
           }
         }
       }
+    }
 
-      // 4. Detect manual .subscribe() calls without takeUntilDestroyed (RxJS Memory Leaks)
-      if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'subscribe') {
+    // 4. Detect manual .subscribe() calls without takeUntilDestroyed (RxJS Memory Leaks)
+    const calls = context.getNodes<ts.CallExpression>(ts.SyntaxKind.CallExpression);
+    for (const node of calls) {
+      if (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'subscribe') {
         let isSafe = false;
         const receiver = node.expression.expression;
         if (ts.isCallExpression(receiver) && ts.isPropertyAccessExpression(receiver.expression) && receiver.expression.name.text === 'pipe') {
@@ -166,67 +171,65 @@ export class ParadigmRule implements Rule {
           });
         }
       }
+    }
 
-      // 5. Detect platform isolation violations (direct access to window, document, localStorage, etc.)
-      if (ts.isIdentifier(node)) {
-        const text = node.text;
-        if (text === 'window' || text === 'document' || text === 'localStorage' || text === 'sessionStorage') {
-          let p = node.parent;
-          let isPropertyAccessName = p && ts.isPropertyAccessExpression(p) && p.name === node;
-          let isImportOrType = false;
-          while (p) {
-            if (ts.isImportDeclaration(p) || ts.isImportSpecifier(p) || ts.isTypeReferenceNode(p) || ts.isParameter(p)) {
-              isImportOrType = true;
-              break;
-            }
-            p = p.parent;
+    // 5. Detect platform isolation violations (direct access to window, document, localStorage, etc.)
+    const identifiers = context.getNodes<ts.Identifier>(ts.SyntaxKind.Identifier);
+    for (const node of identifiers) {
+      const text = node.text;
+      if (text === 'window' || text === 'document' || text === 'localStorage' || text === 'sessionStorage') {
+        let p = node.parent;
+        let isPropertyAccessName = p && ts.isPropertyAccessExpression(p) && p.name === node;
+        let isImportOrType = false;
+        while (p) {
+          if (ts.isImportDeclaration(p) || ts.isImportSpecifier(p) || ts.isTypeReferenceNode(p) || ts.isParameter(p)) {
+            isImportOrType = true;
+            break;
           }
-          if (!isPropertyAccessName && !isImportOrType) {
-            let isSafe = false;
-            let parentNode: ts.Node | undefined = node.parent;
-            while (parentNode) {
-              if (ts.isCallExpression(parentNode)) {
-                const exprText = parentNode.expression.getText(sourceFile);
-                if (exprText === 'afterRender' || exprText === 'afterNextRender') {
-                  isSafe = true;
-                  break;
-                }
+          p = p.parent;
+        }
+        if (!isPropertyAccessName && !isImportOrType) {
+          let isSafe = false;
+          let parentNode: ts.Node | undefined = node.parent;
+          while (parentNode) {
+            if (ts.isCallExpression(parentNode)) {
+              const exprText = parentNode.expression.getText(sourceFile);
+              if (exprText === 'afterRender' || exprText === 'afterNextRender') {
+                isSafe = true;
+                break;
               }
-              if (ts.isIfStatement(parentNode)) {
-                const condText = parentNode.expression.getText(sourceFile);
-                if (condText.includes('isPlatformBrowser')) {
-                  isSafe = true;
-                  break;
-                }
-              }
-              if (ts.isConditionalExpression(parentNode)) {
-                const condText = parentNode.condition.getText(sourceFile);
-                if (condText.includes('isPlatformBrowser')) {
-                  isSafe = true;
-                  break;
-                }
-              }
-              parentNode = parentNode.parent;
             }
+            if (ts.isIfStatement(parentNode)) {
+              const condText = parentNode.expression.getText(sourceFile);
+              if (condText.includes('isPlatformBrowser')) {
+                isSafe = true;
+                break;
+              }
+            }
+            if (ts.isConditionalExpression(parentNode)) {
+              const condText = parentNode.condition.getText(sourceFile);
+              if (condText.includes('isPlatformBrowser')) {
+                isSafe = true;
+                break;
+              }
+            }
+            parentNode = parentNode.parent;
+          }
 
-            if (!isSafe) {
-              const { line, character } = getLineAndCharacter(sourceFile, node);
-              violations.push({
-                ruleId: 'PLATFORM_ISOLATION_VIOLATION',
-                message: `SSR/Hydration Safety Violation: Direct access to global variable "${text}" is forbidden. Inject the "DOCUMENT" token or use "isPlatformBrowser" / "afterRender" checks for platform-agnostic code.`,
-                file: filePath,
-                line,
-                character
-              });
-            }
+          if (!isSafe) {
+            const { line, character } = getLineAndCharacter(sourceFile, node);
+            violations.push({
+              ruleId: 'PLATFORM_ISOLATION_VIOLATION',
+              message: `SSR/Hydration Safety Violation: Direct access to global variable "${text}" is forbidden. Inject the "DOCUMENT" token or use "isPlatformBrowser" / "afterRender" checks for platform-agnostic code.`,
+              file: filePath,
+              line,
+              character
+            });
           }
         }
       }
-
-      ts.forEachChild(node, checkNode);
     }
 
-    ts.forEachChild(sourceFile, checkNode);
     return violations;
   }
 }

@@ -82,8 +82,10 @@ export class PerformanceRule implements Rule {
       }
     };
 
-    function findComponentDecorator(node: ts.Node) {
-      if (ts.isClassDeclaration(node) && node.modifiers) {
+    // Find Component Decorator and check template
+    const classes = context.getNodes<ts.ClassDeclaration>(ts.SyntaxKind.ClassDeclaration);
+    for (const node of classes) {
+      if (node.modifiers) {
         for (const mod of node.modifiers) {
           if (ts.isDecorator(mod) && ts.isCallExpression(mod.expression)) {
             const decoratorName = mod.expression.expression.getText(sourceFile);
@@ -104,7 +106,8 @@ export class PerformanceRule implements Rule {
                       const templatePath = path.resolve(path.dirname(filePath), templateUrl);
                       if (fs.existsSync(templatePath)) {
                         try {
-                          localTemplateContent = fs.readFileSync(templatePath, 'utf8');
+                          // Use the cached readTemplateFile helper in configManager
+                          localTemplateContent = configManager.readTemplateFile(templatePath);
                           localTemplateNode = prop.initializer;
                         } catch {
                           // ignore read error
@@ -123,23 +126,19 @@ export class PerformanceRule implements Rule {
           }
         }
       }
-      ts.forEachChild(node, findComponentDecorator);
     }
-    findComponentDecorator(sourceFile);
 
     const isRoutingFile = /\b(routing|routes)\b/i.test(path.basename(filePath));
     const importedComponentFiles: Array<{ importPath: string; node: ts.Node }> = [];
 
-    function collectComponentImports(node: ts.Node) {
-      if (ts.isImportDeclaration(node)) {
-        const importPath = node.moduleSpecifier.getText(sourceFile).replace(/['"]/g, '');
-        if (/\b(component)\b/i.test(importPath) || importPath.endsWith('.component')) {
-          importedComponentFiles.push({ importPath, node });
-        }
+    // Collect Component Imports
+    const imports = context.getNodes<ts.ImportDeclaration>(ts.SyntaxKind.ImportDeclaration);
+    for (const node of imports) {
+      const importPath = node.moduleSpecifier.getText(sourceFile).replace(/['"]/g, '');
+      if (/\b(component)\b/i.test(importPath) || importPath.endsWith('.component')) {
+        importedComponentFiles.push({ importPath, node });
       }
-      ts.forEachChild(node, collectComponentImports);
     }
-    collectComponentImports(sourceFile);
 
     if (isRoutingFile && importedComponentFiles.length > 0) {
       for (const imp of importedComponentFiles) {
