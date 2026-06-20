@@ -1,0 +1,8 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "../../dist/apps/demo-app",
+    "types": ["node"]
+  },
+  "include": ["src/**/*"]
+}

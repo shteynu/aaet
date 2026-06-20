@@ -1,0 +1,32 @@
+{
+  "name": "demo-app",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "application",
+  "sourceRoot": "apps/demo-app/src",
+  "targets": {
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "npx vitest run apps/demo-app/src/aaet.spec.ts"
+      }
+    },
+    "analyze": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "npx tsx libs/core/src/index.ts"
+      }
+    },
+    "fix": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "npx tsx libs/core/src/index.ts --fix"
+      }
+    },
+    "context": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "npx tsx libs/core/src/index.ts --context"
+      }
+    }
+  }
+}

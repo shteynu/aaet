@@ -6,11 +6,10 @@ import { Rule, RuleContext, Violation, getLineAndCharacter } from './rule.interf
 export class PerformanceRule implements Rule {
   run(context: RuleContext): Violation[] {
     const violations: Violation[] = [];
-    const { sourceFile, filePath } = context;
+    const { sourceFile, filePath, configManager } = context;
+    const angularVersion = configManager.getAngularVersion();
 
-    let templateContent = '';
-    let hasTemplate = false;
-    let templateNode: ts.Node | null = null;
+    const allTemplates: string[] = [];
 
     const checkTemplateString = (template: string, sourceNode: ts.Node) => {
       const interpolationRegex = /\{\{([\s\S]*?)\}\}/g;
@@ -47,6 +46,40 @@ export class PerformanceRule implements Rule {
           });
         }
       }
+
+      // Check for legacy control flow directives
+      if (angularVersion >= 17) {
+        if (/\*ngIf\b/.test(template)) {
+          const { line, character } = getLineAndCharacter(sourceFile, sourceNode);
+          violations.push({
+            ruleId: 'LEGACY_TEMPLATE_CONTROL_FLOW',
+            message: `Modern Syntax Violation: Legacy structural directive "*ngIf" detected. Enforce modern Angular v17+ control flow syntax (e.g. "@if (...) {}") for better performance and cleaner AI code generation.`,
+            file: filePath,
+            line,
+            character
+          });
+        }
+        if (/\*ngFor\b/.test(template)) {
+          const { line, character } = getLineAndCharacter(sourceFile, sourceNode);
+          violations.push({
+            ruleId: 'LEGACY_TEMPLATE_CONTROL_FLOW',
+            message: `Modern Syntax Violation: Legacy structural directive "*ngFor" detected. Enforce modern Angular v17+ control flow syntax (e.g. "@for (...) {}") for better performance and cleaner AI code generation.`,
+            file: filePath,
+            line,
+            character
+          });
+        }
+        if (/\*ngSwitch\b/.test(template)) {
+          const { line, character } = getLineAndCharacter(sourceFile, sourceNode);
+          violations.push({
+            ruleId: 'LEGACY_TEMPLATE_CONTROL_FLOW',
+            message: `Modern Syntax Violation: Legacy structural directive "*ngSwitch" detected. Enforce modern Angular v17+ control flow syntax (e.g. "@switch (...) {}") for better performance and cleaner AI code generation.`,
+            file: filePath,
+            line,
+            character
+          });
+        }
+      }
     };
 
     function findComponentDecorator(node: ts.Node) {
@@ -55,6 +88,8 @@ export class PerformanceRule implements Rule {
           if (ts.isDecorator(mod) && ts.isCallExpression(mod.expression)) {
             const decoratorName = mod.expression.expression.getText(sourceFile);
             if (decoratorName === 'Component') {
+              let localTemplateContent = '';
+              let localTemplateNode: ts.Node | null = null;
               const args = mod.expression.arguments;
               if (args.length > 0 && ts.isObjectLiteralExpression(args[0])) {
                 const properties = args[0].properties;
@@ -62,17 +97,15 @@ export class PerformanceRule implements Rule {
                   if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
                     const name = prop.name.text;
                     if (name === 'template') {
-                      hasTemplate = true;
-                      templateContent = prop.initializer.getText(sourceFile).replace(/^['"`]|['"`]$/g, '');
-                      templateNode = prop.initializer;
+                      localTemplateContent = prop.initializer.getText(sourceFile).replace(/^['"`]|['"`]$/g, '');
+                      localTemplateNode = prop.initializer;
                     } else if (name === 'templateUrl') {
-                      hasTemplate = true;
                       const templateUrl = prop.initializer.getText(sourceFile).replace(/^['"`]|['"`]$/g, '');
                       const templatePath = path.resolve(path.dirname(filePath), templateUrl);
                       if (fs.existsSync(templatePath)) {
                         try {
-                          templateContent = fs.readFileSync(templatePath, 'utf8');
-                          templateNode = prop.initializer;
+                          localTemplateContent = fs.readFileSync(templatePath, 'utf8');
+                          localTemplateNode = prop.initializer;
                         } catch {
                           // ignore read error
                         }
@@ -81,6 +114,11 @@ export class PerformanceRule implements Rule {
                   }
                 }
               }
+
+              if (localTemplateContent && localTemplateNode) {
+                allTemplates.push(localTemplateContent);
+                checkTemplateString(localTemplateContent, localTemplateNode);
+              }
             }
           }
         }
@@ -88,10 +126,6 @@ export class PerformanceRule implements Rule {
       ts.forEachChild(node, findComponentDecorator);
     }
     findComponentDecorator(sourceFile);
-
-    if (hasTemplate && templateContent && templateNode) {
-      checkTemplateString(templateContent, templateNode);
-    }
 
     const isRoutingFile = /\b(routing|routes)\b/i.test(path.basename(filePath));
     const importedComponentFiles: Array<{ importPath: string; node: ts.Node }> = [];
@@ -120,7 +154,7 @@ export class PerformanceRule implements Rule {
       }
     }
 
-    const hasDeferBlock = /@defer\b/.test(templateContent);
+    const hasDeferBlock = allTemplates.some(template => /@defer\b/.test(template));
     if (hasDeferBlock && importedComponentFiles.length > 0) {
       for (const imp of importedComponentFiles) {
         const { line, character } = getLineAndCharacter(sourceFile, imp.node);

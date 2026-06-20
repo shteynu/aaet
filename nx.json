@@ -1,0 +1,12 @@
+{
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "analytics": false,
+  "targetDefaults": {
+    "test": {
+      "cache": true
+    },
+    "analyze": {
+      "cache": true
+    }
+  }
+}

@@ -1,4 +1,6 @@
 // Dynamic DI Interceptor for dev mode boundary enforcement
+import { analyzeViolationWithAi, isAiGuardEnabled } from './ai-guard';
+
 export interface RuntimeLayerConfig {
   layers: { [key: string]: string };
   layerRestrictions: Array<{
@@ -8,6 +10,10 @@ export interface RuntimeLayerConfig {
 }
 
 let diGuardEnabled = false;
+
+export function resetDiGuard() {
+  diGuardEnabled = false;
+}
 
 /**
  * Monkey-patches Angular's Injector to dynamically trace DI dependency resolutions
@@ -57,11 +63,18 @@ export function setupDiGuard(
 
         // Check if a component directly injects an API service
         if (dependentLower.endsWith('component') && (dependencyLower.includes('api') && dependencyLower.includes('service'))) {
-          console.error(
-            `❌ [AAET DI Violation] Dynamic DI boundary violation detected!\n` +
-            `   Class "${dependent}" directly injected "${dependency}".\n` +
-            `   Boundary rule: UI Components must not inject API Services directly. Use a Facade instead.`
-          );
+          const msg = `Dynamic DI boundary violation detected!\n` +
+            `Class "${dependent}" directly injected "${dependency}".\n` +
+            `Boundary rule: UI Components must not inject API Services directly. Use a Facade instead.`;
+          console.error(`❌ [AAET DI Violation] ${msg}`);
+          
+          if (isAiGuardEnabled()) {
+            analyzeViolationWithAi({
+              ruleId: 'STRICT_LAYERING',
+              message: msg,
+              className: dependent
+            });
+          }
         }
       }
 

@@ -1,0 +1,7 @@
+{
+  "name": "runtime",
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "projectType": "library",
+  "sourceRoot": "libs/runtime/src",
+  "targets": {}
+}

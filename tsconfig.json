@@ -10,7 +10,12 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "experimentalDecorators": true,
-    "emitDecoratorMetadata": true
+    "emitDecoratorMetadata": true,
+    "baseUrl": ".",
+    "paths": {
+      "@aaet/core": ["libs/core/src/index.ts"],
+      "@aaet/runtime": ["libs/runtime/src/index.ts"]
+    }
   },
-  "include": ["src/**/*", "tests/**/*"]
+  "include": ["libs/**/*", "apps/**/*"]
 }
