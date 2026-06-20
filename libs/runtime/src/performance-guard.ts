@@ -1,4 +1,5 @@
 import { analyzeViolationWithAi, isAiGuardEnabled } from './ai-guard';
+import { globalRuntimeConfig } from './config-state';
 
 const methodCallCounts = new Map<string, { count: number; lastReset: number }>();
 
@@ -28,6 +29,11 @@ export function ProfileMethods(options: ProfileOptions = {}) {
 
         const proxyMethod = new Proxy(originalMethod, {
           apply(targetMethod, thisArg, argumentsList) {
+            if (globalRuntimeConfig && globalRuntimeConfig.checkers?.runtime?.enabled === false) {
+              return targetMethod.apply(thisArg, argumentsList);
+            }
+            const runtimeRules = globalRuntimeConfig?.checkers?.runtime?.rules;
+
             const start = performance.now();
             
             // Frequency tracking
@@ -40,7 +46,7 @@ export function ProfileMethods(options: ProfileOptions = {}) {
             stats.count++;
             methodCallCounts.set(methodKey, stats);
 
-            if (stats.count > maxCallFrequency) {
+            if (runtimeRules?.['TEMPLATE_METHOD_CALL'] !== false && stats.count > maxCallFrequency) {
               const msg = `Method "${methodKey}" called ${stats.count} times in the last second.\n` +
                 `This high frequency suggests potential invocation inside a UI template (Change Detection cost) or an SRP violation.`;
               console.warn(`⚠️ [AAET Performance Warning] ${msg}`);
@@ -59,7 +65,7 @@ export function ProfileMethods(options: ProfileOptions = {}) {
             } finally {
               const end = performance.now();
               const duration = end - start;
-              if (duration > thresholdMs) {
+              if (runtimeRules?.['SLOW_METHOD_EXECUTION'] !== false && duration > thresholdMs) {
                 const msg = `Method "${methodKey}" execution took ${duration.toFixed(2)}ms, exceeding the threshold of ${thresholdMs}ms.`;
                 console.warn(`⚠️ [AAET Performance Warning] ${msg}`);
                 
@@ -89,6 +95,13 @@ export function ProfileMethods(options: ProfileOptions = {}) {
  * Logs a warning if a task blocks the main thread for too long (default >16ms, indicating frame drop).
  */
 export function setupZoneGuard(angularCore: any, thresholdMs = 16) {
+  if (globalRuntimeConfig && globalRuntimeConfig.checkers?.runtime) {
+    if (globalRuntimeConfig.checkers.runtime.enabled === false ||
+        globalRuntimeConfig.checkers.runtime.rules?.['ZONE_BLOCKING_TASK'] === false) {
+      return;
+    }
+  }
+
   if (!angularCore) return;
   const NgZoneClass = angularCore.NgZone;
   if (!NgZoneClass || !NgZoneClass.prototype) return;
@@ -122,6 +135,13 @@ export function setupZoneGuard(angularCore: any, thresholdMs = 16) {
  * Logs a warning if the number of ticks per second exceeds the maxTicksPerSecond threshold.
  */
 export function setupChangeDetectionGuard(angularCore: any, maxTicksPerSecond = 20) {
+  if (globalRuntimeConfig && globalRuntimeConfig.checkers?.runtime) {
+    if (globalRuntimeConfig.checkers.runtime.enabled === false ||
+        globalRuntimeConfig.checkers.runtime.rules?.['EXCESSIVE_CHANGE_DETECTION'] === false) {
+      return;
+    }
+  }
+
   if (!angularCore) return;
   const AppRef = angularCore.ApplicationRef;
   if (!AppRef || !AppRef.prototype) return;

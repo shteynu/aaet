@@ -1,4 +1,5 @@
 import { analyzeViolationWithAi, isAiGuardEnabled } from './ai-guard';
+import { globalRuntimeConfig } from './config-state';
 
 export interface AiVerifyOptions {
   customRules?: string;
@@ -16,7 +17,9 @@ export function AiVerify(options: AiVerifyOptions = {}) {
     const newConstructor: any = function(...args: any[]) {
       const instance = new original(...args);
       
-      if (isAiGuardEnabled() && !checked) {
+      const isVerifyEnabled = globalRuntimeConfig ? (globalRuntimeConfig.checkers?.runtime?.enabled !== false && globalRuntimeConfig.checkers?.runtime?.rules?.['AI_VERIFY_DECORATOR'] !== false) : true;
+
+      if (isAiGuardEnabled() && isVerifyEnabled && !checked) {
         checked = true;
         analyzeViolationWithAi({
           ruleId: 'AI_VERIFY_DECORATOR',

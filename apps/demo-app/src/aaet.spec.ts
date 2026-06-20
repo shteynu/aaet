@@ -755,5 +755,104 @@ describe('AAET AI Guard & Verification Engine', () => {
     const reports = mockReport.mock.calls.map(call => call[0].message);
     expect(reports.some(msg => msg.includes('ENFORCE_STANDALONE') || msg.includes('ENFORCE_ONPUSH'))).toBe(true);
   });
+
+  describe('AAET Checker Configuration & Dynamic Disabling', () => {
+    it('should respect disabled static rules and not report violations for them', () => {
+      const stubComponentFile = path.resolve(__dirname, 'stub-component.ts');
+      const content = fs.readFileSync(stubComponentFile, 'utf8');
+      const sourceFile = ts.createSourceFile(
+        stubComponentFile,
+        content,
+        ts.ScriptTarget.Latest,
+        true
+      );
+
+      const customConfigManager = new ConfigManager(projectRoot);
+      vi.spyOn(customConfigManager, 'getConfig').mockReturnValue({
+        layers: { ui: '**/*component.ts' },
+        layerRestrictions: [],
+        limits: { maxAllowedDI: 3, maxLines: 400 },
+        checkers: {
+          static: {
+            enabled: true,
+            rules: {
+              ENFORCE_STANDALONE: false,
+              ENFORCE_ONPUSH: false
+            }
+          }
+        }
+      });
+
+      const violations = runStaticAnalysisForSourceFile(sourceFile, stubComponentFile, customConfigManager);
+      const ruleIds = violations.map(v => v.ruleId);
+      expect(ruleIds).not.toContain('ENFORCE_STANDALONE');
+      expect(ruleIds).not.toContain('ENFORCE_ONPUSH');
+    });
+
+    it('should skip static analysis entirely if static checker is disabled', () => {
+      const stubComponentFile = path.resolve(__dirname, 'stub-component.ts');
+      const content = fs.readFileSync(stubComponentFile, 'utf8');
+      const sourceFile = ts.createSourceFile(
+        stubComponentFile,
+        content,
+        ts.ScriptTarget.Latest,
+        true
+      );
+
+      const customConfigManager = new ConfigManager(projectRoot);
+      vi.spyOn(customConfigManager, 'getConfig').mockReturnValue({
+        layers: { ui: '**/*component.ts' },
+        layerRestrictions: [],
+        limits: { maxAllowedDI: 3, maxLines: 400 },
+        checkers: {
+          static: {
+            enabled: false
+          }
+        }
+      });
+
+      const violations = runStaticAnalysisForSourceFile(sourceFile, stubComponentFile, customConfigManager);
+      expect(violations.length).toBe(0);
+    });
+
+    it('should respect checkers.runtime.enabled === false in setupAaetRuntime and not trigger warnings', () => {
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      resetDiGuard();
+
+      const config = {
+        layers: { ui: '**/*component.ts', api: '**/*api.service.ts' },
+        layerRestrictions: [{ from: 'ui', cannotDependOn: ['api'] }],
+        checkers: {
+          runtime: {
+            enabled: false
+          }
+        }
+      };
+
+      class MockInjector {
+        get(token: any): any {
+          if (token.name === 'StubComponent') {
+            this.get({ name: 'ApiService' });
+          }
+          return {};
+        }
+      }
+
+      const mockAngularCore = {
+        isDevMode: () => true,
+        Injector: MockInjector
+      };
+
+      const { setupAaetRuntime } = require('../../../libs/runtime/src/index');
+      setupAaetRuntime(config, mockAngularCore);
+
+      class StubComponent {}
+      const injector = new MockInjector();
+      injector.get(StubComponent);
+
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+      consoleErrorSpy.mockRestore();
+    });
+  });
 });
 

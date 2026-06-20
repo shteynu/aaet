@@ -1,4 +1,5 @@
 import { analyzeViolationWithAi, isAiGuardEnabled } from './ai-guard';
+import { globalRuntimeConfig } from './config-state';
 
 let computedNestingLevel = 0;
 
@@ -83,6 +84,13 @@ export function wrapSignal(originalSignal: any) {
  * mutations inside computed contexts.
  */
 export function setupSignalGuard(angularCore: any) {
+  if (globalRuntimeConfig && globalRuntimeConfig.checkers?.runtime) {
+    if (globalRuntimeConfig.checkers.runtime.enabled === false ||
+        globalRuntimeConfig.checkers.runtime.rules?.['MUTABLE_SIGNAL_IN_COMPUTED'] === false) {
+      return;
+    }
+  }
+
   if (!angularCore) return;
 
   try {

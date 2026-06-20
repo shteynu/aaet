@@ -1,5 +1,6 @@
 // Dynamic DI Interceptor for dev mode boundary enforcement
 import { analyzeViolationWithAi, isAiGuardEnabled } from './ai-guard';
+import { globalRuntimeConfig } from './config-state';
 
 export interface RuntimeLayerConfig {
   layers: { [key: string]: string };
@@ -23,6 +24,12 @@ export function setupDiGuard(
   config: RuntimeLayerConfig,
   angularCore: any // Pass @angular/core reference or Injector prototype dynamically to avoid peerDependency compile blocks in tests
 ) {
+  if (globalRuntimeConfig && globalRuntimeConfig.checkers?.runtime) {
+    if (globalRuntimeConfig.checkers.runtime.enabled === false ||
+        globalRuntimeConfig.checkers.runtime.rules?.['STRICT_LAYERING'] === false) {
+      return;
+    }
+  }
   // If no Angular core reference, check window.ng or global scope
   const core = angularCore || (globalThis as any).ngCore;
   if (!core) {

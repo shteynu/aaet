@@ -1,4 +1,5 @@
 import { analyzeViolationWithAi, isAiGuardEnabled } from './ai-guard';
+import { globalRuntimeConfig } from './config-state';
 
 export const activeSubscriptions = new Map<any, { stack: string; timestamp: number }>();
 
@@ -10,6 +11,13 @@ let rxjsSamplingRate = 1.0;
  * and detect leaks (subscriptions that are never unsubscribed).
  */
 export function setupRxjsGuard(ObservableClass: any, config?: { stackDepth?: number; samplingRate?: number }) {
+  if (globalRuntimeConfig && globalRuntimeConfig.checkers?.runtime) {
+    if (globalRuntimeConfig.checkers.runtime.enabled === false ||
+        globalRuntimeConfig.checkers.runtime.rules?.['RXJS_SUBSCRIPTION_LEAK'] === false) {
+      return;
+    }
+  }
+
   if (!ObservableClass || !ObservableClass.prototype) {
     return;
   }
@@ -72,6 +80,13 @@ export const activeComponentCounts = new Map<any, number>();
  * belonging to that component class when all of its active instances are destroyed.
  */
 export function setupRxjsComponentTracking(angularCore: any) {
+  if (globalRuntimeConfig && globalRuntimeConfig.checkers?.runtime) {
+    if (globalRuntimeConfig.checkers.runtime.enabled === false ||
+        globalRuntimeConfig.checkers.runtime.rules?.['RXJS_SUBSCRIPTION_LEAK'] === false) {
+      return;
+    }
+  }
+
   const core = angularCore || (globalThis as any).ngCore;
   if (!core || injectorPatched) return;
   const InjectorClass = core.Injector;

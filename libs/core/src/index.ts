@@ -35,6 +35,13 @@ export function runStaticAnalysisForSourceFile(
   filePath: string,
   configManager: ConfigManager
 ): Violation[] {
+  const config = configManager.getConfig();
+  const staticConfig = config.checkers?.static;
+
+  if (staticConfig?.enabled === false) {
+    return [];
+  }
+
   const rules: Rule[] = [
     new LayeringRule(),
     new AiReadinessRule(),
@@ -69,6 +76,16 @@ export function runStaticAnalysisForSourceFile(
     const v = rule.run(context);
     violations.push(...v);
   }
+
+  if (staticConfig?.rules) {
+    return violations.filter(v => {
+      if (staticConfig.rules![v.ruleId] !== undefined) {
+        return staticConfig.rules![v.ruleId];
+      }
+      return true;
+    });
+  }
+
   return violations;
 }
 

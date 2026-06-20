@@ -10,6 +10,31 @@ export interface AiGuardConfig {
   customRules?: string;
   workspaceType?: 'nx' | 'standalone';
   angularVersion?: number;
+  autoAnalyze?: boolean;
+}
+
+export interface StaticCheckerConfig {
+  enabled?: boolean;
+  rules?: { [key: string]: boolean };
+  limits?: {
+    maxAllowedDI?: number;
+    maxLines?: number;
+  };
+}
+
+export interface RuntimeCheckerConfig {
+  enabled?: boolean;
+  rules?: { [key: string]: boolean };
+  stackDepth?: number;
+  samplingRate?: number;
+}
+
+export interface AiCheckerConfig extends AiGuardConfig {}
+
+export interface CheckersConfig {
+  static?: StaticCheckerConfig;
+  runtime?: RuntimeCheckerConfig;
+  ai?: AiCheckerConfig;
 }
 
 export interface AaetConfig {
@@ -23,6 +48,7 @@ export interface AaetConfig {
     maxLines: number;
   };
   aiGuard?: AiGuardConfig;
+  checkers?: CheckersConfig;
 }
 
 export class ConfigManager {
@@ -94,6 +120,54 @@ export class ConfigManager {
     } else {
       this.workspaceType = 'standalone';
     }
+
+    // Normalize checkers configuration for backward compatibility and unified access
+    if (!this.config.checkers) {
+      this.config.checkers = {};
+    }
+
+    if (!this.config.checkers.static) {
+      this.config.checkers.static = { enabled: true };
+    }
+
+    if (!this.config.checkers.static.limits) {
+      this.config.checkers.static.limits = this.config.limits || { maxAllowedDI: 3, maxLines: 400 };
+    }
+
+    // Keep the legacy limits block in sync with static checkers
+    this.config.limits = {
+      maxAllowedDI: this.config.checkers.static.limits.maxAllowedDI ?? 3,
+      maxLines: this.config.checkers.static.limits.maxLines ?? 400
+    };
+
+    if (!this.config.checkers.runtime) {
+      this.config.checkers.runtime = { enabled: true };
+    }
+
+    if (!this.config.checkers.ai) {
+      this.config.checkers.ai = {
+        enabled: this.config.aiGuard?.enabled ?? false,
+        provider: this.config.aiGuard?.provider || 'anthropic',
+        endpointUrl: this.config.aiGuard?.endpointUrl || '/api/aaet-ai-check',
+        apiKey: this.config.aiGuard?.apiKey,
+        customRules: this.config.aiGuard?.customRules,
+        angularVersion: this.config.aiGuard?.angularVersion || this.angularVersion,
+        workspaceType: this.config.aiGuard?.workspaceType || this.workspaceType,
+        autoAnalyze: this.config.aiGuard?.autoAnalyze ?? false
+      };
+    }
+
+    // Keep aiGuard in sync for backward compatibility
+    this.config.aiGuard = {
+      enabled: this.config.checkers.ai.enabled,
+      provider: this.config.checkers.ai.provider,
+      endpointUrl: this.config.checkers.ai.endpointUrl,
+      apiKey: this.config.checkers.ai.apiKey,
+      customRules: this.config.checkers.ai.customRules,
+      angularVersion: this.config.checkers.ai.angularVersion,
+      workspaceType: this.config.checkers.ai.workspaceType,
+      autoAnalyze: this.config.checkers.ai.autoAnalyze
+    };
   }
 
   getAngularVersion(): number {
