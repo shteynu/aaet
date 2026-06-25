@@ -2,7 +2,7 @@
 
 AAET is a configurable Angular architecture analyzer with optional, experimental runtime diagnostics and AI-assisted explanations.
 
-Static analysis is the default product. Runtime and AI checkers are opt-in.
+Static analysis is the default product. Runtime and AI checkers are opt-in..
 
 ## Setup
 
